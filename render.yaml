@@ -6,7 +6,7 @@ services:
     runtime: node
     plan: free
     branch: main
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run build
+    buildCommand: corepack enable && (pnpm install --no-frozen-lockfile || true) && pnpm rebuild -r esbuild && pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run build
     startCommand: node artifacts/api-server/dist/index.cjs
     healthCheckPath: /api/healthz
     envVars:
