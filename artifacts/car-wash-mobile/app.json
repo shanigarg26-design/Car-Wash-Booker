@@ -2,6 +2,7 @@
   "expo": {
     "name": "CarCleanPro",
     "slug": "car-wash-mobile",
+    "owner": "shanigarg26s-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

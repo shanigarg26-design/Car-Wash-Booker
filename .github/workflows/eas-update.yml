@@ -1,0 +1,39 @@
+name: Publish app update (EAS)
+
+# Every push to main republishes the JS bundle to Expo (EAS Update).
+# Your phone (Expo Go) pulls the latest on next open — no reinstall.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Link Expo project & publish update
+        working-directory: artifacts/car-wash-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas init --non-interactive || true
+          eas update:configure --non-interactive || true
+          eas update --branch preview --message "$(git log -1 --pretty=%s)" --non-interactive
