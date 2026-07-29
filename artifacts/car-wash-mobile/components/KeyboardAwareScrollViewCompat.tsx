@@ -1,29 +1,38 @@
+import React from "react";
 import {
-  KeyboardAwareScrollView,
-  KeyboardAwareScrollViewProps,
-} from "react-native-keyboard-controller";
-import { Platform, ScrollView, ScrollViewProps } from "react-native";
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  ScrollViewProps,
+} from "react-native";
 
-type Props = KeyboardAwareScrollViewProps & ScrollViewProps;
+// Expo Go compatible: uses a plain ScrollView inside a KeyboardAvoidingView.
+// (Previously used react-native-keyboard-controller, which isn't available in Expo Go.)
+type Props = ScrollViewProps & {
+  children?: React.ReactNode;
+  // tolerate any extra props previously passed to the keyboard-controller version
+  [key: string]: any;
+};
 
 export function KeyboardAwareScrollViewCompat({
   children,
   keyboardShouldPersistTaps = "handled",
+  contentContainerStyle,
+  style,
   ...props
 }: Props) {
-  if (Platform.OS === "web") {
-    return (
-      <ScrollView keyboardShouldPersistTaps={keyboardShouldPersistTaps} {...props}>
+  return (
+    <KeyboardAvoidingView
+      style={[{ flex: 1 }, style]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView
+        keyboardShouldPersistTaps={keyboardShouldPersistTaps}
+        contentContainerStyle={contentContainerStyle}
+        {...props}
+      >
         {children}
       </ScrollView>
-    );
-  }
-  return (
-    <KeyboardAwareScrollView
-      keyboardShouldPersistTaps={keyboardShouldPersistTaps}
-      {...props}
-    >
-      {children}
-    </KeyboardAwareScrollView>
+    </KeyboardAvoidingView>
   );
 }

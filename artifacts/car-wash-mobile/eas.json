@@ -1,0 +1,32 @@
+{
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://carcleanpro-api.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com"
+      }
+    },
+    "production": {
+      "channel": "production",
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://carcleanpro-api.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

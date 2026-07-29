@@ -52,4 +52,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# Mobile app public config (EXPO_PUBLIC_* are embedded in the client bundle — not secret)
+!artifacts/car-wash-mobile/.env
 .replit
