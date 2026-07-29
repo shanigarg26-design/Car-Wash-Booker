@@ -1,0 +1,725 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Car Wash Booking App API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: users
+    description: User registration and management
+  - name: carwash-owners
+    description: Car wash business owner operations
+  - name: washers
+    description: Car washer operations
+  - name: bookings
+    description: Booking operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /users/register:
+    post:
+      operationId: registerUser
+      tags: [users]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterUserBody"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/login:
+    post:
+      operationId: loginUser
+      tags: [users]
+      summary: Login a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginUserBody"
+      responses:
+        "200":
+          description: Logged in successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      tags: [users]
+      summary: Get current logged in user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/logout:
+    post:
+      operationId: logoutUser
+      tags: [users]
+      summary: Logout current user
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /carwash-owners:
+    get:
+      operationId: listCarwashOwners
+      tags: [carwash-owners]
+      summary: List all car wash businesses
+      responses:
+        "200":
+          description: List of car wash businesses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CarwashOwner"
+    post:
+      operationId: createCarwashOwner
+      tags: [carwash-owners]
+      summary: Register a car wash business
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCarwashOwnerBody"
+      responses:
+        "201":
+          description: Car wash business created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CarwashOwner"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /carwash-owners/{id}:
+    get:
+      operationId: getCarwashOwner
+      tags: [carwash-owners]
+      summary: Get car wash business by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Car wash business
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CarwashOwner"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /washers:
+    get:
+      operationId: listWashers
+      tags: [washers]
+      summary: List all car washers
+      parameters:
+        - name: available
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of car washers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Washer"
+    post:
+      operationId: createWasher
+      tags: [washers]
+      summary: Register as a car washer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWasherBody"
+      responses:
+        "201":
+          description: Washer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Washer"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /washers/{id}:
+    get:
+      operationId: getWasher
+      tags: [washers]
+      summary: Get washer by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Washer details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Washer"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /washers/me:
+    get:
+      operationId: getMyWasherProfile
+      tags: [washers]
+      summary: Get current user's washer profile
+      responses:
+        "200":
+          description: Washer profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Washer"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateMyWasherProfile
+      tags: [washers]
+      summary: Update current user's washer profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWasherBody"
+      responses:
+        "200":
+          description: Updated washer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Washer"
+
+  /bookings:
+    get:
+      operationId: listBookings
+      tags: [bookings]
+      summary: List bookings for current user
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [customer, washer]
+      responses:
+        "200":
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Booking"
+    post:
+      operationId: createBooking
+      tags: [bookings]
+      summary: Create a new booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingBody"
+      responses:
+        "201":
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/{id}:
+    get:
+      operationId: getBooking
+      tags: [bookings]
+      summary: Get booking by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/{id}/accept:
+    patch:
+      operationId: acceptBooking
+      tags: [bookings]
+      summary: Washer accepts a booking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Booking accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/{id}/decline:
+    patch:
+      operationId: declineBooking
+      tags: [bookings]
+      summary: Washer declines a booking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Booking declined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/{id}/complete:
+    patch:
+      operationId: completeBooking
+      tags: [bookings]
+      summary: Mark booking as complete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Booking completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bookings/{id}/cancel:
+    patch:
+      operationId: cancelBooking
+      tags: [bookings]
+      summary: Customer cancels a booking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+
+    RegisterUserBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [customer, washer, owner]
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+      required:
+        - name
+        - email
+        - password
+        - role
+        - address
+        - city
+
+    LoginUserBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [customer, washer, owner]
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - email
+        - role
+        - address
+        - city
+        - createdAt
+
+    CarwashOwner:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        businessName:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        ownerName:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - userId
+        - businessName
+        - address
+        - city
+        - ownerName
+        - createdAt
+
+    CreateCarwashOwnerBody:
+      type: object
+      properties:
+        businessName:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+      required:
+        - businessName
+        - address
+        - city
+
+    Washer:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+        bio:
+          type: ["string", "null"]
+        pricePerWash:
+          type: integer
+        available:
+          type: boolean
+        rating:
+          type: ["number", "null"]
+        totalWashes:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - userId
+        - name
+        - address
+        - city
+        - pricePerWash
+        - available
+        - totalWashes
+        - createdAt
+
+    CreateWasherBody:
+      type: object
+      properties:
+        address:
+          type: string
+        city:
+          type: string
+        phone:
+          type: ["string", "null"]
+        bio:
+          type: ["string", "null"]
+        pricePerWash:
+          type: integer
+      required:
+        - address
+        - city
+        - pricePerWash
+
+    UpdateWasherBody:
+      type: object
+      properties:
+        address:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        phone:
+          type: ["string", "null"]
+        bio:
+          type: ["string", "null"]
+        pricePerWash:
+          type: ["integer", "null"]
+        available:
+          type: ["boolean", "null"]
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: integer
+        customerId:
+          type: integer
+        washerId:
+          type: integer
+        customerName:
+          type: string
+        washerName:
+          type: string
+        customerAddress:
+          type: string
+        scheduledAt:
+          type: string
+        status:
+          type: string
+          enum: [pending, accepted, declined, completed, cancelled]
+        notes:
+          type: ["string", "null"]
+        priceQuoted:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - customerId
+        - washerId
+        - customerName
+        - washerName
+        - customerAddress
+        - scheduledAt
+        - status
+        - priceQuoted
+        - createdAt
+
+    CreateBookingBody:
+      type: object
+      properties:
+        washerId:
+          type: integer
+        customerAddress:
+          type: string
+        scheduledAt:
+          type: string
+        notes:
+          type: ["string", "null"]
+      required:
+        - washerId
+        - customerAddress
+        - scheduledAt

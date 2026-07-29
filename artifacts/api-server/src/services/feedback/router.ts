@@ -1,0 +1,80 @@
+/**
+ * Feedback Service – Router
+ * Handles customer and washer ratings/reviews for completed bookings.
+ */
+import { Router, type IRouter } from "express";
+import { db, feedbackTable, bookingsTable, usersTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
+
+const router: IRouter = Router();
+
+router.post("/feedback", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const { bookingId, rating, comment } = req.body;
+  if (!bookingId || !rating || rating < 1 || rating > 5) {
+    res.status(400).json({ error: "bookingId and rating (1-5) required" }); return;
+  }
+
+  const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, Number(bookingId)));
+  if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+  if (booking.status !== "completed" && booking.status !== "accepted") {
+    res.status(400).json({ error: "Can only review completed or accepted bookings" }); return;
+  }
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+  const isCustomer   = booking.customerId === userId;
+  const reviewerRole = isCustomer ? "customer" : "washer";
+
+  if (!isCustomer) {
+    const [washer] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!washer || washer.role !== "washer") {
+      res.status(403).json({ error: "Not authorized to review this booking" }); return;
+    }
+  }
+
+  const existing = await db
+    .select()
+    .from(feedbackTable)
+    .where(and(eq(feedbackTable.bookingId, Number(bookingId)), eq(feedbackTable.reviewerId, userId)));
+  if (existing.length > 0) { res.status(409).json({ error: "You have already reviewed this booking" }); return; }
+
+  const [created] = await db.insert(feedbackTable).values({
+    bookingId: Number(bookingId), reviewerId: userId,
+    reviewerRole, rating: Number(rating), comment: comment || null,
+  }).returning();
+
+  res.status(201).json(created);
+});
+
+router.get("/feedback/booking/:id", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const bookingId = Number(req.params.id);
+  const reviews   = await db
+    .select({
+      id: feedbackTable.id, bookingId: feedbackTable.bookingId,
+      reviewerId: feedbackTable.reviewerId, reviewerRole: feedbackTable.reviewerRole,
+      rating: feedbackTable.rating, comment: feedbackTable.comment,
+      createdAt: feedbackTable.createdAt, reviewerName: usersTable.name,
+    })
+    .from(feedbackTable)
+    .leftJoin(usersTable, eq(feedbackTable.reviewerId, usersTable.id))
+    .where(eq(feedbackTable.bookingId, bookingId));
+
+  res.json(reviews.map(r => ({ ...r, createdAt: r.createdAt.toISOString() })));
+});
+
+router.get("/feedback/mine", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const reviews = await db.select().from(feedbackTable).where(eq(feedbackTable.reviewerId, userId));
+  res.json(reviews.map(r => ({ ...r, createdAt: r.createdAt.toISOString() })));
+});
+
+export default router;
