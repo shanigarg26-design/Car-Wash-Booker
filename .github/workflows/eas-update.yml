@@ -34,4 +34,5 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          npx expo install babel-preset-expo
           eas update --branch preview --message "$(git log -1 --pretty=%s)" --non-interactive
