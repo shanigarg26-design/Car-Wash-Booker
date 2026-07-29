@@ -62,10 +62,10 @@
     "expo-device": "^55.0.9",
     "expo-notifications": "^55.0.12",
     "expo-task-manager": "^55.0.9",
+    "expo-updates": "~29.0.19",
     "leaflet": "^1.9.4",
     "lucide-react": "catalog:",
     "lucide-react-native": "^0.577.0",
-    "react-native-maps": "^1.27.2",
     "react-native-webview": "^13.16.1"
   }
 }
