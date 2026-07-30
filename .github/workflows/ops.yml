@@ -6,7 +6,12 @@ name: Ops — API troubleshooting (no UI)
 #   Trigger:  gh workflow run ops.yml -f action=status
 #   Read it:  gh run list --workflow ops.yml -L1   then   gh run view <id> --log
 #
-# actions: status | render-service | render-deploys | render-logs | expo-builds | neon-status
+# actions: status | render-service | render-deploys | render-logs | expo-builds | neon-status | sql
+#
+# SQL with NO UI and NO credential in chat:
+#   gh workflow run ops.yml -f action=sql -f query="select id,name,email,role from users order by id;"
+# The step reads DATABASE_URL live from Render's env vars (via RENDER_API_KEY) and runs psql on
+# the runner — the connection string never leaves the runner and is masked in logs.
 
 on:
   workflow_dispatch:
@@ -23,10 +28,15 @@ on:
           - render-logs
           - expo-builds
           - neon-status
+          - sql
       limit:
         description: "How many rows / log lines"
         required: false
         default: "10"
+      query:
+        description: "SQL to run (only used when action=sql)"
+        required: false
+        default: "select id, name, email, role, is_logged_in from users order by id;"
 
 env:
   RENDER_SERVICE: srv-d9kr4fijnfac739oerk0
@@ -97,3 +107,25 @@ jobs:
           curl -s -H "Authorization: Bearer $NEON_API_KEY" \
             "https://console.neon.tech/api/v2/projects?org_id=$NEON_ORG_ID" \
             | jq -r '(.projects // [])[] | "\(.name)  id=\(.id)  region=\(.region_id)  created=\(.created_at)"'
+
+      - name: SQL — run a query against the live DB (DATABASE_URL from Render)
+        if: ${{ inputs.action == 'sql' }}
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SQL: ${{ inputs.query }}
+          PGSSLMODE: require
+        run: |
+          set -e
+          command -v psql >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          # Read the live connection string from Render (stays on the runner, never printed).
+          DB_URL=$(curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$RENDER_SERVICE/env-vars" \
+            | jq -r '.[].envVar | select(.key=="DATABASE_URL") | .value')
+          if [ -z "$DB_URL" ] || [ "$DB_URL" = "null" ]; then
+            echo "Could not read DATABASE_URL from Render env vars."; exit 1
+          fi
+          echo "::add-mask::$DB_URL"
+          echo "### SQL result"
+          echo "Query: $SQL"
+          echo "---"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "$SQL"
