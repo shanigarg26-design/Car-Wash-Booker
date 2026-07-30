@@ -1,0 +1,53 @@
+name: Appetize sync (push latest EAS build)
+
+# Fetches an EAS Android build's APK URL (via EXPO_TOKEN) and updates the Appetize
+# app to it (via APPETIZE_TOKEN) — so the Appetize binary matches the latest build.
+#   gh workflow run appetize-sync.yml -f buildId=<eas-build-id>   (blank = latest finished)
+
+on:
+  workflow_dispatch:
+    inputs:
+      buildId:
+        description: "EAS build id (blank = latest finished Android build)"
+        required: false
+        default: ""
+
+env:
+  EAS_PROJECT_ID: d4b8d786-3cf7-4a02-acbf-d9405f07ce48
+  APPETIZE_PUBLIC_KEY: 5fp4jgoj5ejuwfnwiqezrsky4q
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get APK URL from EAS and push to Appetize
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+          BUILD_ID: ${{ inputs.buildId }}
+        run: |
+          set -e
+          Q='query { app { byId(appId: "'"$EAS_PROJECT_ID"'") { builds(offset: 0, limit: 15) { id status platform appVersion createdAt artifacts { applicationArchiveUrl } } } } }'
+          PAYLOAD=$(jq -n --arg q "$Q" '{query:$q}')
+          RESP=$(curl -s -X POST https://api.expo.dev/graphql -H "Authorization: Bearer $EXPO_TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD")
+
+          if [ -n "$BUILD_ID" ]; then
+            URL=$(echo "$RESP" | jq -r --arg id "$BUILD_ID" '.data.app.byId.builds[] | select(.id==$id) | .artifacts.applicationArchiveUrl')
+          else
+            URL=$(echo "$RESP" | jq -r 'first(.data.app.byId.builds[] | select(.status=="FINISHED" and .platform=="ANDROID")) | .artifacts.applicationArchiveUrl')
+          fi
+
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "Could not resolve an APK URL. EAS response head:"; echo "$RESP" | head -c 600; exit 1
+          fi
+          echo "::add-mask::$URL"
+          echo "Resolved APK URL (masked). Uploading to Appetize app $APPETIZE_PUBLIC_KEY ..."
+
+          CODE=$(curl -s -o /tmp/appetize.json -w "%{http_code}" -X POST \
+            -H "X-API-KEY: $APPETIZE_TOKEN" -H "Content-Type: application/json" \
+            -d "$(jq -n --arg u "$URL" '{url:$u, platform:"android"}')" \
+            "https://api.appetize.io/v1/apps/$APPETIZE_PUBLIC_KEY")
+
+          echo "Appetize update -> HTTP $CODE"
+          jq '{publicKey, name, platform, versionCode, updatedAt}' /tmp/appetize.json 2>/dev/null || head -c 500 /tmp/appetize.json
+          [ "$CODE" = "200" ] || [ "$CODE" = "201" ]
