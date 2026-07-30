@@ -3,7 +3,7 @@
  * Handles customer and washer ratings/reviews for completed bookings.
  */
 import { Router, type IRouter } from "express";
-import { db, feedbackTable, bookingsTable, usersTable } from "@workspace/db";
+import { db, feedbackTable, bookingsTable, usersTable, cleanersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -27,11 +27,14 @@ router.post("/feedback", async (req, res): Promise<void> => {
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
   const isCustomer   = booking.customerId === userId;
-  const reviewerRole = isCustomer ? "customer" : "washer";
+  const reviewerRole = isCustomer ? "customer" : "cleaner";
 
   if (!isCustomer) {
-    const [washer] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
-    if (!washer || washer.role !== "washer") {
+    // The only non-customer allowed to review is the cleaner assigned to THIS booking.
+    // (This app's role is "cleaner"; the previous check compared against a non-existent
+    // "washer" role, so cleaners could never leave a review — always 403.)
+    const [cleaner] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+    if (!cleaner || booking.cleanerId !== cleaner.id) {
       res.status(403).json({ error: "Not authorized to review this booking" }); return;
     }
   }

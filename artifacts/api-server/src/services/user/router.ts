@@ -179,7 +179,7 @@ router.patch("/users/me/location", async (req, res): Promise<void> => {
             vehicleType: booking.vehicleType ?? null,
             cleanType:   booking.cleanType   ?? null,
             address:     booking.customerAddress,
-            price:       booking.price,
+            price:       booking.priceQuoted,
           },
         );
         console.log(`[ProactiveDispatch] Booking ${booking.id} dispatched to cleaner ${cleaner.id} (just came online)`);

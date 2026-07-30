@@ -337,9 +337,24 @@ router.patch("/bookings/:id/start", async (req, res): Promise<void> => {
 
 // ── PATCH /api/bookings/:id/complete ─────────────────────────────────────────
 router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
   const rawId  = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = CompleteBookingParams.safeParse({ id: parseInt(rawId, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [existing] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, params.data.id));
+  if (!existing) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  // Only the assigned cleaner or the booking's customer may complete it.
+  const [cleaner] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+  const isAssignedCleaner = !!cleaner && existing.cleanerId === cleaner.id;
+  const isCustomer        = existing.customerId === userId;
+  if (!isAssignedCleaner && !isCustomer) { res.status(403).json({ error: "Not authorized to complete this booking" }); return; }
+  if (!["accepted", "arrived", "in_progress"].includes(existing.status)) {
+    res.status(409).json({ error: "Booking cannot be completed at this stage" }); return;
+  }
 
   const [booking] = await db.update(bookingsTable).set({ status: "completed" }).where(eq(bookingsTable.id, params.data.id)).returning();
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
@@ -490,11 +505,25 @@ router.patch("/bookings/:id/customer-cancel", async (req, res): Promise<void> =>
   res.json(GetBookingResponse.parse(await enrichBooking(updated)));
 });
 
-// ── PATCH /api/bookings/:id/cancel (admin/legacy) ────────────────────────────
+// ── PATCH /api/bookings/:id/cancel (customer searching-cancel / admin) ────────
 router.patch("/bookings/:id/cancel", async (req, res): Promise<void> => {
+  const session = req.session as unknown as Record<string, unknown>;
+  const userId  = session.userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
   const rawId  = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = CancelBookingParams.safeParse({ id: parseInt(rawId, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [existing] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, params.data.id));
+  if (!existing) { res.status(404).json({ error: "Booking not found" }); return; }
+  // Only the owning customer (or an admin) may cancel via this endpoint.
+  if (existing.customerId !== userId && session.isAdmin !== true) {
+    res.status(403).json({ error: "Not your booking" }); return;
+  }
+
+  // Stop the in-flight search loop so the old request stops re-dispatching.
+  cancelRetry(params.data.id);
 
   await db.update(bookingDispatchesTable).set({ status: "cancelled" }).where(and(eq(bookingDispatchesTable.bookingId, params.data.id), eq(bookingDispatchesTable.status, "pending")));
 

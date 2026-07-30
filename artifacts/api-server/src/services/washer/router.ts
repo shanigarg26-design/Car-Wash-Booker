@@ -18,9 +18,31 @@ import {
 
 const router: IRouter = Router();
 
+/**
+ * Ensures a cleaner-role user always has a `cleaners` profile row.
+ * Older/migrated accounts (and any role change) could end up as role="cleaner"
+ * WITHOUT a matching cleaners row, which broke GET/PATCH /cleaners/me with a 404
+ * (e.g. the Online/Offline toggle). This self-heals by creating a default,
+ * OFFLINE profile on demand. Returns null only if the user isn't a cleaner.
+ */
+async function ensureCleanerProfile(userId: number): Promise<boolean> {
+  const [existing] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+  if (existing) return true;
+
+  const [user] = await db.select({ role: usersTable.role }).from(usersTable).where(eq(usersTable.id, userId));
+  if (!user || user.role !== "cleaner") return false;
+
+  await db.insert(cleanersTable)
+    .values({ userId, pricePerClean: 0, available: false, totalCleans: 0 })
+    .onConflictDoNothing();
+  return true;
+}
+
 router.get("/cleaners/me", async (req, res): Promise<void> => {
   const userId = (req.session as Record<string, unknown>).userId as number | undefined;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  if (!(await ensureCleanerProfile(userId))) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
 
   const [cleaner] = await db
     .select({
@@ -44,6 +66,8 @@ router.patch("/cleaners/me", async (req, res): Promise<void> => {
 
   const parsed = UpdateMyWasherProfileBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  if (!(await ensureCleanerProfile(userId))) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
 
   const updateData: Record<string, unknown> = {};
   if (parsed.data.phone        != null) updateData.phone        = parsed.data.phone;
