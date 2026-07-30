@@ -229,6 +229,9 @@ export const ListBookingsResponseItem = zod.object({
   priceQuoted: zod.number(),
   createdAt: zod.string(),
   dispatchedCount: zod.number().optional(),
+  customerAvatar: zod.string().nullish(),
+  washerAvatar: zod.string().nullish(),
+  washerCancelledPreviously: zod.boolean().optional(),
 });
 export const ListBookingsResponse = zod.array(ListBookingsResponseItem);
 
@@ -274,6 +277,9 @@ export const GetBookingResponse = zod.object({
   otpShared: zod.boolean(),
   createdAt: zod.string(),
   dispatchedCount: zod.number().optional(),
+  customerAvatar: zod.string().nullish(),
+  washerAvatar: zod.string().nullish(),
+  washerCancelledPreviously: zod.boolean().optional(),
 });
 
 /**
