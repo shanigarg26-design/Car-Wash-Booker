@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/context/AuthContext';
 import Colors from '@/constants/colors';
+import { BUILD_TAG } from '@/constants/build';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/api/client';
@@ -567,11 +568,17 @@ export default function DashboardScreen() {
       {user.role === 'customer' && <CustomerDashboard user={user} />}
       {user.role === 'cleaner' && <CleanerDashboard />}
       {user.role === 'owner' && <OwnerDashboard user={user} />}
+      {/* Build stamp — confirms the newest bundle is running (changes every update). */}
+      <Text style={styles.buildStamp}>build · {BUILD_TAG}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  buildStamp: {
+    position: 'absolute', bottom: 2, right: 8,
+    color: Colors.dark.tabIconDefault, opacity: 0.5, fontSize: 10,
+  },
   container: {
     flex: 1,
     padding: 20,
