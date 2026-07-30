@@ -12,8 +12,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_BASE": "https://carcleanpro-api.onrender.com",
-        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com",
-        "EXPO_ROUTER_APP_ROOT": "/home/expo/workingdir/build/artifacts/car-wash-mobile/app"
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com"
       }
     },
     "production": {
@@ -23,8 +22,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_BASE": "https://carcleanpro-api.onrender.com",
-        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com",
-        "EXPO_ROUTER_APP_ROOT": "/home/expo/workingdir/build/artifacts/car-wash-mobile/app"
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "1043948849652-976tk09r2o80t48sbv9golftsh0dr3pg.apps.googleusercontent.com"
       }
     }
   },
