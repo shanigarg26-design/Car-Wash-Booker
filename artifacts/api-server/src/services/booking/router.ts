@@ -106,6 +106,11 @@ router.post("/bookings", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   const { customerAddress, customerLat, customerLng, notes, vehicleType, washType } = parsed.data;
+
+  // Defensive length caps — the app sends short values, but reject abusive payloads.
+  if (customerAddress.length > 500) { res.status(400).json({ error: "address_too_long", message: "Address is too long." }); return; }
+  if (notes != null && notes.length > 1000) { res.status(400).json({ error: "notes_too_long", message: "Notes are too long." }); return; }
+
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
 

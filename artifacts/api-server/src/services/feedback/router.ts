@@ -19,8 +19,8 @@ router.post("/feedback", async (req, res): Promise<void> => {
 
   const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, Number(bookingId)));
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
-  if (booking.status !== "completed" && booking.status !== "accepted") {
-    res.status(400).json({ error: "Can only review completed or accepted bookings" }); return;
+  if (booking.status !== "completed") {
+    res.status(400).json({ error: "not_completed", message: "You can only review a completed booking." }); return;
   }
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
