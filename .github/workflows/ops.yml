@@ -31,6 +31,7 @@ on:
 env:
   RENDER_SERVICE: srv-d9kr4fijnfac739oerk0
   EAS_PROJECT_ID: d4b8d786-3cf7-4a02-acbf-d9405f07ce48
+  NEON_ORG_ID: org-billowing-cell-76962707
 
 jobs:
   ops:
@@ -94,5 +95,5 @@ jobs:
           if [ -z "$NEON_API_KEY" ]; then echo "NEON_API_KEY secret not set — skipping."; exit 0; fi
           echo "### Neon — projects"
           curl -s -H "Authorization: Bearer $NEON_API_KEY" \
-            "https://console.neon.tech/api/v2/projects" \
+            "https://console.neon.tech/api/v2/projects?org_id=$NEON_ORG_ID" \
             | jq -r '(.projects // [])[] | "\(.name)  id=\(.id)  region=\(.region_id)  created=\(.created_at)"'
