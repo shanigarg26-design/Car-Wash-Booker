@@ -11,7 +11,7 @@ import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { DevSettings, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import AppIcon from "@/components/AppIcon";
 import { BUILD_TAG } from "@/constants/build";
 
@@ -114,15 +114,19 @@ const globalHomeStyles = StyleSheet.create({
 // Global build stamp — shows on EVERY screen (incl. login) so you can confirm at a
 // glance that the newest bundle is running on Appetize / the phone.
 function GlobalBuildStamp() {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={buildStampStyles.wrap} pointerEvents="none">
+    <View style={[buildStampStyles.wrap, { top: (insets.top || 24) + 2 }]} pointerEvents="none">
       <Text style={buildStampStyles.text}>build · {BUILD_TAG}</Text>
     </View>
   );
 }
 const buildStampStyles = StyleSheet.create({
-  wrap: { position: 'absolute', bottom: 4, left: 10, zIndex: 99999 },
-  text: { color: '#94A3B8', opacity: 0.7, fontSize: 10 },
+  wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 99999 },
+  text: {
+    color: '#fff', backgroundColor: 'rgba(37,99,235,0.92)',
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, fontSize: 10, overflow: 'hidden',
+  },
 });
 
 // Registers Expo push token after login and handles notification taps
