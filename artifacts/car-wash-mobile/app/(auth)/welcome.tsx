@@ -637,7 +637,7 @@ export default function WelcomeScreen() {
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
             >
               <AppIcon name="phone" size={20} color="#fff" />
-              <Text style={styles.phoneCtaText}>Login OR Register with Phone</Text>
+              <Text style={styles.phoneCtaText}>Login / Register with Phone</Text>
             </LinearGradient>
           </TouchableOpacity>
 
