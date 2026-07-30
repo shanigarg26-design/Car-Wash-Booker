@@ -1,78 +1,41 @@
-# CarCleanPro — Project Status & History
+# CarCleanPro — Project Status (updated 2026-07-31)
 
-> Read this + `CLAUDE.md` at the start of any new chat (desktop or web) to get the full picture.
-> This file is the GitHub-based "memory" of what has been done. It contains **no secrets**
-> (all secrets live in Render / Neon / Google Console / GitHub Actions secrets).
+On-demand car wash app. **Everything is cloud-hosted; no laptop dependency.** A new
+Claude session (desktop, web at claude.ai/code, or mobile) can pick up from here — read
+this + `CLAUDE.md`, then work directly on GitHub via `gh`.
 
-_Last updated: 2026-07-30._
+## Architecture / where things live
+- **Code:** GitHub `shanigarg26-design/Car-Wash-Booker` (branch `main`). Monorepo:
+  `artifacts/api-server` (Express backend), `artifacts/car-wash-mobile` (Expo/React Native app),
+  `lib/db` (Drizzle schema, Neon Postgres), `lib/api-zod` (shared zod schemas).
+- **Backend:** Render web service `carcleanpro-api` (https://carcleanpro-api.onrender.com),
+  auto-deploys on push to main (build runs `drizzle-kit push --force` → schema changes auto-apply).
+  Health `/api/healthz`. `render.yaml` has a `buildFilter` so mobile/docs/.github changes DON'T redeploy the API.
+- **Database:** Neon Postgres (project `royal-mud-88588731`, org `org-billowing-cell-76962707`).
+- **Mobile app:** Expo SDK 54, EAS project `d4b8d786-3cf7-4a02-acbf-d9405f07ce48` (owner `shanigarg26s-team`).
+  JS changes ship as **EAS Updates (OTA)** on push to main (`.github/workflows/eas-update.yml`, branch/channel `preview`, runtimeVersion `1.0.0`). Native rebuild only for native changes.
+- **Appetize** (browser emulator): app publicKey `5fp4jgoj5ejuwfnwiqezrsky4q`. The current APK
+  has `fallbackToCacheTimeout` so it fetches the latest OTA on launch → refresh + Start shows latest.
 
-## What this is
-A car-wash booking app: an **Expo/React Native** mobile app + an **Express** API backend, in a pnpm
-workspace monorepo. Fully cloud-hosted; the running app has no dependency on any local machine.
+## How work is done (no website UIs needed)
+All driven via `gh` CLI + GitHub Actions, with keys as **encrypted GitHub secrets**:
+`RENDER_API_KEY`, `NEON_API_KEY`, `EXPO_TOKEN`, `SWEEP_TOKEN`, `APPETIZE_TOKEN`.
+- Edit code: read/write files via `gh api .../contents/...` (or git data API for atomic multi-file commits).
+- **Run SQL (no Neon UI):** `gh workflow run ops.yml -f action=sql -f query="..."` then read the run log. Other ops actions: status/render-*/expo-builds/neon-status.
+- **Self-healing cron:** `sweep.yml` (every 5 min) → `/api/internal/sweep`: reassigns vanished cleaners, expires stale searches, promotes due scheduled bookings, nudges overrunning washes.
+- **Keep-alive:** `keepalive.yml` (monthly) keeps scheduled workflows enabled.
+- **Push a new native build to Appetize:** `gh workflow run appetize-sync.yml -f buildId=<eas-build-id>`.
+- **Build stamp:** `constants/build.ts` `BUILD_TAG` renders as a blue pill at the TOP of every screen (global overlay in `app/_layout.tsx`). **Bump it to a new random string on EVERY mobile change.** Current: `gold-otter-2208`.
 
-## Cloud architecture (all live)
-- **Code:** GitHub `shanigarg26-design/Car-Wash-Booker`, branch `main`. Source of truth.
-- **Backend API:** Render web service `carcleanpro-api` → https://carcleanpro-api.onrender.com
-  (auto-deploys on push; free tier sleeps after inactivity → first request can take ~50s).
-- **Database:** Neon Postgres, project "Car Wash Booker". App reads/writes here.
-- **Mobile app:** EAS project `shani-garg` (owner `shanigarg26s-team`), Android package
-  `com.shanigarg26.carcleanpro`.
+## Features live (all backend-verified; app UIs shipped via OTA)
+Book → nearest-cleaner dispatch → accept (OTP) → arrive → start → complete → rate.
+Auto-cancel if none found. Live cleaner tracking. Ratings roll up. Pricing by vehicle+wash type.
+Plus: **packages/subscriptions** (1wk/15d/1mo/6mo/1yr, rising 5→30% discount, prepaid, covered bookings ₹0) with a **dummy card/UPI/net-banking payment screen** (`app/pay.tsx`); **scheduled bookings** (preset chips); **edit booking** before accept; **in-app chat** (customer↔cleaner); **stop cleaning** mid-wash by EITHER party → prorated by time spent (30min exterior / 45min full SLA, washer nudged if over); **find a new cleaner** if the assigned one ghosts (re-search, no charge); **start/end times** in booking detail. Stop (charged) is a DISTINCT button from Cancel (free). Merged washer online/offline into ONE clear toggle.
 
-## Current working build
-- **First fully-working APK:** commit `df57e0c`, build id `81941504-02e0-418a-b797-3866467acfdd`.
-- Install page (open on Android): https://expo.dev/accounts/shanigarg26s-team/projects/shani-garg/builds/81941504-02e0-418a-b797-3866467acfdd
-- **Login:** OTP bypass code `1111` on the phone verification screen.
+## Auth / testing notes
+- Login via phone OTP; **master OTP `1111` works for ANY phone** (dev bypass since SMS isn't configured). ⚠️ PRE-LAUNCH BLOCKER — gate to dev-only once a Fast2SMS key is added.
+- Test with throwaway accounts (`*@carcleanpro.test`, phones `+9190000000xx`); delete them after via the `sql` ops action.
+- Sessions use in-memory MemoryStore → users get logged out on each redeploy (optional fix: `connect-pg-simple`).
 
-## How updates reach the phone
-- **JS/code changes** publish automatically as **EAS Updates** on push to `main`
-  (`.github/workflows/eas-update.yml`, channel `preview`). Installed app picks them up on next
-  close+reopen (~2–3 min end to end). No reinstall.
-- **Native changes** (new native module, permission, icon, SDK upgrade) need a **new APK + reinstall**:
-  run `.github/workflows/eas-build.yml` (GitHub Actions → Run workflow, or `gh workflow run eas-build.yml`).
-
-## How to make changes
-- Edit code, commit, `git push origin main`. `gh` CLI is authenticated (scopes repo + workflow).
-- Everyday changes (text/screens/logic) → OTA, reopen the app.
-- To build a native APK from CLI: `gh workflow run eas-build.yml --repo shanigarg26-design/Car-Wash-Booker`.
-
-## Bugs fixed to get the app working (history)
-1. **expo-router require.context bundling** — production build failed because `EXPO_ROUTER_APP_ROOT` /
-   `EXPO_ROUTER_IMPORT_MODE` weren't inlined. Fixed with a custom Babel plugin in
-   `artifacts/car-wash-mobile/babel.config.js` that inlines `EXPO_ROUTER_APP_ROOT` as a **relative**
-   path per-file (an absolute path finds zero routes → "No routes found") and `EXPO_ROUTER_IMPORT_MODE=sync`.
-   Don't reintroduce an absolute value.
-2. **Native module version mismatch** — `expo-device`/`expo-notifications`/`expo-task-manager` were pinned
-   to v55 (a newer SDK) while the app is SDK 54; native code crashed with "No virtual method
-   getAppContext()". Fixed by pinning to SDK-54 versions (`expo-device ~8.0.10`,
-   `expo-notifications ~0.32.16`, `expo-task-manager ~14.0.9`). Added `frozen-lockfile=false` to `.npmrc`
-   so the cloud build re-resolves. Get correct versions via `curl -s https://unpkg.com/expo@<ver>/bundledNativeModules.json`.
-3. **Google OAuth redirect_uri** — backend built the redirect URL from `REPLIT_DOMAINS` (empty off Replit →
-   `https:///…`). Fixed in `artifacts/api-server/src/services/auth/google.router.ts` to derive from the
-   request host (or `PUBLIC_BASE_URL`).
-
-## Google login setup (done, needs final end-to-end test)
-- Backend redirect_uri fix deployed.
-- `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` set in Render (were missing — only existed on Replit).
-- Redirect URI `https://carcleanpro-api.onrender.com/api/auth/google/callback` added to the Google Cloud
-  OAuth client ("Web client 1", project WashPro). Phone (OTP) login already works regardless.
-
-## Data migration (done)
-- Original data lived in the **Replit** database, not in the code. Migrated it into Neon via the Replit
-  Shell: `pg_dump --data-only "$DATABASE_URL" | psql "<neon-url>"` (with `session_replication_role=replica`).
-- Migrated: 7 users, 18 bookings, 2 cleaners, 21 booking_dispatches, 1 feedback. Reset all id sequences
-  afterward (via Neon SQL Editor) so new sign-ups don't collide.
-
-## Testing without a physical phone
-- The APK runs in a browser Android emulator via **Appetize.io** (logged in with the user's Google).
-  Upload a build by URL via the Appetize API; open `https://appetize.io/app/<publicKey>`, enable Debug
-  Logs, "Tap to Start" — logcat shows real crashes.
-
-## Pending / cleanup
-- [ ] Finish end-to-end test of Google login (phone + emulator).
-- [ ] **Rotate secrets** (they were exposed during setup): Neon DB password, Google OAuth client secret,
-      and any API keys pasted into chat. Update Render env + Google Console after rotating.
-- [ ] Optional: keep Render/Neon/Expo management on API/CLI instead of dashboards.
-
-## Preferences
-- User wants **zero local dependency** for running the app, and prefers edits committed directly to GitHub.
-- Keep this file + `CLAUDE.md` updated as the durable, GitHub-based project memory.
+## Known remaining (optional)
+SMS OTP + close the `1111` backdoor (needs Fast2SMS key); DB-backed session store; rotate the API keys that passed through chat; surface start/end times on the history LIST (currently on booking detail only).
