@@ -5,6 +5,11 @@ import router from "./gateway/index.js";
 
 const app: Express = express();
 
+// Render terminates TLS at its proxy and forwards to us over HTTP with
+// `X-Forwarded-Proto: https`. Trusting the first proxy lets `req.secure` reflect
+// the real HTTPS connection, which is required for `secure` session cookies to be set.
+app.set("trust proxy", 1);
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -14,8 +19,11 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false,
-    httpOnly: true,
+    // "auto" → Secure flag in production (HTTPS via the proxy) but not on a local
+    //   HTTP dev server, so both environments work without a manual toggle.
+    secure: "auto",
+    httpOnly: true,        // JS can't read the cookie (XSS defence)
+    sameSite: "none",      // allow the cookie on the app's cross-origin API calls
     maxAge: 7 * 24 * 60 * 60 * 1000,
   },
 }));

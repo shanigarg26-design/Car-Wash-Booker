@@ -1,0 +1,29 @@
+name: Keep-alive (keep scheduled workflows enabled)
+
+# GitHub automatically disables scheduled workflows (like the sweep) after 60 days
+# of repository inactivity. This job runs monthly and commits a timestamp so the
+# repo stays "active" and the sweep cron keeps firing. It only touches .github/**,
+# which render.yaml's buildFilter ignores — so it does NOT trigger an API deploy.
+
+on:
+  schedule:
+    - cron: "17 4 1 * *"   # 04:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Touch keep-alive file + commit
+        run: |
+          mkdir -p .github
+          echo "last keep-alive: $(date -u +%FT%TZ) (run ${GITHUB_RUN_ID})" > .github/keepalive.txt
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "chore: keep-alive — keep scheduled workflows enabled" || { echo "nothing to commit"; exit 0; }
+          git push

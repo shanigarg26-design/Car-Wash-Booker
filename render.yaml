@@ -9,6 +9,14 @@ services:
     buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run build
     startCommand: node artifacts/api-server/dist/index.cjs
     healthCheckPath: /api/healthz
+    # Only redeploy the API when server-relevant files change. The mobile app is
+    # built by EAS (not Render), and docs/workflow changes don't affect the server —
+    # so those (incl. the monthly keep-alive commit) no longer trigger wasteful builds.
+    buildFilter:
+      ignoredPaths:
+        - "artifacts/car-wash-mobile/**"
+        - "**/*.md"
+        - ".github/**"
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -21,4 +29,6 @@ services:
       - key: GOOGLE_CLIENT_SECRET  # optional; paste in dashboard
         sync: false
       - key: FAST2SMS_API_KEY      # optional (SMS OTP); without it, OTP dev-mode + code 1111
+        sync: false
+      - key: SWEEP_TOKEN           # shared secret for the /api/internal/sweep cron (set in dashboard)
         sync: false
