@@ -93,7 +93,7 @@ export default function WelcomeScreen() {
     },
     (err) => {
       if (err instanceof ApiError && err.code === 'email_registered_via_phone') {
-        setGoogleAuthError('This Google email is already registered via phone number. Please use "Login with Phone" instead.');
+        setGoogleAuthError('This Google email is already registered via phone number. Please use "Log in / Register with Phone" instead.');
       } else {
         setGoogleAuthError(err.message || 'Google sign-in failed. Please try again.');
       }
@@ -637,7 +637,7 @@ export default function WelcomeScreen() {
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
             >
               <AppIcon name="phone" size={20} color="#fff" />
-              <Text style={styles.phoneCtaText}>Login / Register with Phone</Text>
+              <Text style={styles.phoneCtaText}>Log in / Register with Phone</Text>
             </LinearGradient>
           </TouchableOpacity>
 
