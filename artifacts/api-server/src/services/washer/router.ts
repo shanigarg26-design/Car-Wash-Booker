@@ -79,6 +79,12 @@ router.patch("/cleaners/me", async (req, res): Promise<void> => {
     .where(eq(cleanersTable.userId, userId)).returning();
   if (!updated) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
 
+  // Going online counts as a heartbeat — makes the cleaner immediately eligible for
+  // dispatch (which now requires a recent lastSeenAt to exclude phones that are off).
+  if (parsed.data.available === true) {
+    await db.update(usersTable).set({ lastSeenAt: new Date() }).where(eq(usersTable.id, userId));
+  }
+
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   res.json(UpdateMyWasherProfileResponse.parse({ ...updated, pricePerWash: updated.pricePerClean, totalWashes: updated.totalCleans, name: user?.name ?? "", createdAt: updated.createdAt.toISOString() }));
 });

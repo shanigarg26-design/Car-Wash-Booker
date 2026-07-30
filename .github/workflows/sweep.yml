@@ -1,0 +1,31 @@
+name: Sweep — self-heal stale bookings
+
+# Periodically pokes the backend's self-healing sweep so it runs even though
+# Render's free tier sleeps and drops in-process timers. The sweep:
+#   • cancels "searching" bookings that never found a cleaner (backup for the timer)
+#   • reassigns "accepted" bookings whose cleaner went offline before arriving
+# Side benefit: the request also wakes the sleeping Render service.
+#
+# GitHub's shortest cron interval is 5 min and can be delayed under load — that's
+# fine for this use case. Can also be run manually via workflow_dispatch.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call sweep endpoint
+        env:
+          SWEEP_TOKEN: ${{ secrets.SWEEP_TOKEN }}
+        run: |
+          code=$(curl -s -X POST "https://carcleanpro-api.onrender.com/api/internal/sweep" \
+            -H "x-sweep-token: $SWEEP_TOKEN" -H "Content-Type: application/json" \
+            -w "\n%{http_code}" --max-time 60)
+          body=$(echo "$code" | head -n -1); status=$(echo "$code" | tail -n1)
+          echo "sweep -> HTTP $status"
+          echo "$body"
+          [ "$status" = "200" ] || exit 1

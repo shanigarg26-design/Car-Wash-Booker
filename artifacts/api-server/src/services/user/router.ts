@@ -6,10 +6,7 @@
 import { Router, type IRouter } from "express";
 import bcryptjs from "bcryptjs";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
-import { db, usersTable, cleanersTable, bookingsTable, bookingDispatchesTable } from "@workspace/db";
+import { db, usersTable, cleanersTable, bookingsTable, bookingDispatchesTable, avatarsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { haversineKm, MAX_DISPATCH_RADIUS_KM, dispatchToNearestCleaners } from "../booking/dispatcher.js";
 import {
@@ -22,20 +19,10 @@ import {
 const router: IRouter = Router();
 
 // ── Avatar upload setup ───────────────────────────────────────────────────────
-const __dirname   = path.dirname(fileURLToPath(import.meta.url));
-const avatarsDir  = path.join(__dirname, "../../../public/avatars");
-if (!fs.existsSync(avatarsDir)) fs.mkdirSync(avatarsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, avatarsDir),
-  filename:    (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || ".jpg";
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
-  },
-});
-
+// Images are kept IN MEMORY then stored in the DB (base64) so they persist across
+// Render redeploys (the old disk-based approach lost photos on every deploy).
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (!file.mimetype.startsWith("image/")) cb(new Error("Only image files are allowed"));
@@ -206,9 +193,32 @@ router.post("/users/avatar", upload.single("avatar"), async (req, res): Promise<
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
   if (!req.file) { res.status(400).json({ error: "No file uploaded" }); return; }
 
-  const avatarPath = `/api/avatars/${req.file.filename}`;
+  const mimeType = req.file.mimetype || "image/jpeg";
+  const base64   = req.file.buffer.toString("base64");
+
+  // Upsert the image row (one per user), stored in the DB so it survives redeploys.
+  await db.insert(avatarsTable)
+    .values({ userId, mimeType, data: base64 })
+    .onConflictDoUpdate({ target: avatarsTable.userId, set: { mimeType, data: base64, updatedAt: new Date() } });
+
+  // Cache-busting query param so the app fetches the new image after re-upload.
+  const avatarPath = `/api/avatars/${userId}?v=${Date.now()}`;
   await db.update(usersTable).set({ avatarUrl: avatarPath }).where(eq(usersTable.id, userId));
   res.json({ avatarUrl: avatarPath });
+});
+
+// Serve an avatar image straight from the DB. Public (image URLs are embedded in the app).
+router.get("/avatars/:userId", async (req, res): Promise<void> => {
+  const uid = parseInt(req.params.userId, 10);
+  if (isNaN(uid)) { res.status(400).json({ error: "Invalid user id" }); return; }
+
+  const [row] = await db.select().from(avatarsTable).where(eq(avatarsTable.userId, uid));
+  if (!row) { res.status(404).json({ error: "No avatar" }); return; }
+
+  const buf = Buffer.from(row.data, "base64");
+  res.setHeader("Content-Type", row.mimeType);
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(buf);
 });
 
 // POST /api/users/auth/google

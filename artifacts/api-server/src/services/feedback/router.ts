@@ -4,7 +4,7 @@
  */
 import { Router, type IRouter } from "express";
 import { db, feedbackTable, bookingsTable, usersTable, cleanersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -49,6 +49,18 @@ router.post("/feedback", async (req, res): Promise<void> => {
     bookingId: Number(bookingId), reviewerId: userId,
     reviewerRole, rating: Number(rating), comment: comment || null,
   }).returning();
+
+  // When a CUSTOMER rates a cleaner, refresh that cleaner's average rating so it
+  // surfaces on their profile card (previously ratings were stored but never rolled up).
+  if (isCustomer && booking.cleanerId) {
+    await db.execute(sql`
+      UPDATE cleaners SET rating = sub.avg FROM (
+        SELECT AVG(f.rating)::real AS avg
+        FROM feedback f JOIN bookings b ON b.id = f.booking_id
+        WHERE b.cleaner_id = ${booking.cleanerId} AND f.reviewer_role = 'customer'
+      ) sub
+      WHERE cleaners.id = ${booking.cleanerId}`);
+  }
 
   res.status(201).json(created);
 });

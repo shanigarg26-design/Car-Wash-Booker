@@ -35,6 +35,13 @@ router.get("/bookings", async (req, res): Promise<void> => {
     const [cleaner] = await db.select().from(cleanersTable).where(eq(cleanersTable.userId, userId));
     if (!cleaner) { res.json([]); return; }
 
+    // Heartbeat: the cleaner dashboard polls this every few seconds, so a cleaner
+    // with the app open stays "online" for dispatch even if background location
+    // updates aren't running. A phone that's off stops polling → goes stale.
+    if (cleaner.available) {
+      await db.update(usersTable).set({ lastSeenAt: new Date() }).where(eq(usersTable.id, userId));
+    }
+
     // Fetch dispatches across all relevant statuses
     const allDispatches = await db.select().from(bookingDispatchesTable).where(
       and(
@@ -94,6 +101,17 @@ router.post("/bookings", async (req, res): Promise<void> => {
   const { customerAddress, customerLat, customerLng, notes, vehicleType, washType } = parsed.data;
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+  // Prevent duplicate simultaneous bookings — a customer can only have one active
+  // booking at a time. Avoids accidental double-taps creating parallel searches.
+  const activeStatuses = ["searching", "accepted", "arrived", "in_progress"] as const;
+  const [activeExisting] = await db.select({ id: bookingsTable.id, status: bookingsTable.status })
+    .from(bookingsTable)
+    .where(and(eq(bookingsTable.customerId, userId), inArray(bookingsTable.status, activeStatuses as unknown as string[])));
+  if (activeExisting) {
+    res.status(409).json({ error: "active_booking_exists", message: "You already have a booking in progress.", bookingId: activeExisting.id });
+    return;
+  }
 
   const lat            = customerLat ?? user.latitude ?? null;
   const lng            = customerLng ?? user.longitude ?? null;
@@ -204,16 +222,23 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
   );
   if (!dispatch) { res.status(403).json({ error: "Not dispatched to you or already handled" }); return; }
 
-  const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, params.data.id));
-  if (!booking || booking.status !== "searching") { res.status(409).json({ error: "Booking already taken or not available" }); return; }
+  // Atomic claim: only ONE cleaner can flip the booking from "searching" → "accepted".
+  // Conditioning the UPDATE on status='searching' means a second concurrent accept
+  // matches zero rows and loses the race (prevents double-assignment).
+  const otp       = generateServiceOtp();
+  const [updated] = await db.update(bookingsTable)
+    .set({ status: "accepted", cleanerId: cleaner.id, serviceOtp: otp })
+    .where(and(eq(bookingsTable.id, params.data.id), eq(bookingsTable.status, "searching")))
+    .returning();
+  if (!updated) { res.status(409).json({ error: "Booking already taken or not available" }); return; }
 
+  // Won the race — finalize dispatch rows and stop the search loop.
   await db.update(bookingDispatchesTable).set({ status: "accepted" }).where(eq(bookingDispatchesTable.id, dispatch.id));
   await db.update(bookingDispatchesTable).set({ status: "cancelled" }).where(
     and(eq(bookingDispatchesTable.bookingId, params.data.id), ne(bookingDispatchesTable.id, dispatch.id), eq(bookingDispatchesTable.status, "pending"))
   );
+  cancelRetry(params.data.id);
 
-  const otp       = generateServiceOtp();
-  const [updated] = await db.update(bookingsTable).set({ status: "accepted", cleanerId: cleaner.id, serviceOtp: otp }).where(eq(bookingsTable.id, params.data.id)).returning();
   const enriched  = await enrichBooking(updated);
 
   if (enriched._customerPushToken) {

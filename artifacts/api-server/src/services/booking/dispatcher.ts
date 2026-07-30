@@ -9,13 +9,20 @@
  * so it can be moved to a separate process or message queue in the future.
  */
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gte, lt } from "drizzle-orm";
 import { sendPush } from "../../shared/push.js";
 
 export const MAX_DISPATCH           = 5;
 export const MAX_DISPATCH_RADIUS_KM = 5;
 export const MAX_SEARCH_DURATION_MS = 5 * 60 * 1000;  // 5 minutes
 export const SEARCH_RETRY_INTERVAL  = 10_000;          // retry every 10 s
+// A cleaner is only considered truly ONLINE if their app pushed a location/heartbeat
+// within this window. The app pushes every ~20 s while online, so a phone that gets
+// switched off / loses signal goes "stale" and stops receiving bookings automatically.
+export const ONLINE_STALE_MS        = 5 * 60 * 1000;   // 5 minutes
+// If a cleaner ACCEPTS a job then goes offline (phone off) before arriving, the booking
+// is auto-reassigned once their heartbeat is older than this.
+export const ACCEPTED_STALE_MS      = 3 * 60 * 1000;   // 3 minutes
 
 /** Active retry timer per bookingId — used so relocation can cancel old retry loops */
 const retryTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -75,7 +82,13 @@ export async function dispatchToNearestCleaners(
     })
     .from(cleanersTable)
     .leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
-    .where(and(eq(cleanersTable.available, true), eq(usersTable.isLoggedIn, true)));
+    .where(and(
+      eq(cleanersTable.available, true),
+      eq(usersTable.isLoggedIn, true),
+      // Only cleaners whose app checked in recently — excludes "phantom online"
+      // accounts whose phone is off / app was force-quit.
+      gte(usersTable.lastSeenAt, new Date(Date.now() - ONLINE_STALE_MS)),
+    ));
 
   const eligible = allCleaners.filter(w => !excludeCleanerIds.includes(w.id));
   if (eligible.length === 0) return 0;
@@ -180,4 +193,76 @@ export function scheduleSearchRetry(
   }, SEARCH_RETRY_INTERVAL);
 
   retryTimers.set(bookingId, timer);
+}
+
+/**
+ * Self-healing sweep — meant to be called periodically by an external cron
+ * (GitHub Actions) so it works even though Render's free tier sleeps and drops
+ * in-process timers. Handles the "someone's phone switched off" cases:
+ *
+ *  1. `searching` bookings that have exceeded the max search window are cancelled
+ *     (backup for the in-process 5-min timer, which is lost when the dyno sleeps).
+ *  2. `accepted` bookings whose assigned cleaner went offline (stale heartbeat)
+ *     before arriving are reset to `searching` and re-dispatched to other cleaners,
+ *     so the customer isn't stranded waiting for a cleaner who vanished.
+ *
+ * Returns a summary for logging/observability.
+ */
+export async function sweepStaleBookings(): Promise<{ cancelledSearching: number; reassigned: number; reassignFailed: number }> {
+  const now = Date.now();
+  let cancelledSearching = 0, reassigned = 0, reassignFailed = 0;
+
+  // 1) Expire overdue "searching" bookings
+  const staleSearching = await db.select().from(bookingsTable).where(
+    and(eq(bookingsTable.status, "searching"), lt(bookingsTable.createdAt, new Date(now - MAX_SEARCH_DURATION_MS))),
+  );
+  for (const b of staleSearching) {
+    cancelRetry(b.id);
+    await db.update(bookingDispatchesTable).set({ status: "cancelled" })
+      .where(and(eq(bookingDispatchesTable.bookingId, b.id), eq(bookingDispatchesTable.status, "pending")));
+    await db.update(bookingsTable).set({ status: "cancelled" })
+      .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "searching")));
+    cancelledSearching++;
+    console.log(`[Sweep] Booking ${b.id} cancelled — no cleaner found in time`);
+  }
+
+  // 2) Reassign "accepted" bookings whose cleaner went offline before arriving
+  const accepted = await db.select().from(bookingsTable).where(eq(bookingsTable.status, "accepted"));
+  const staleCutoff = new Date(now - ACCEPTED_STALE_MS);
+  for (const b of accepted) {
+    if (!b.cleanerId) continue;
+    const [cu] = await db
+      .select({ lastSeenAt: usersTable.lastSeenAt, pushToken: usersTable.expoPushToken })
+      .from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
+      .where(eq(cleanersTable.id, b.cleanerId));
+    // Fresh heartbeat → cleaner is genuinely en route; leave it alone.
+    if (cu?.lastSeenAt && cu.lastSeenAt >= staleCutoff) continue;
+
+    // Cleaner vanished — free the booking and search again.
+    await db.update(bookingDispatchesTable).set({ status: "cleaner_cancelled" })
+      .where(and(eq(bookingDispatchesTable.bookingId, b.id), eq(bookingDispatchesTable.cleanerId, b.cleanerId)));
+    await db.update(bookingsTable)
+      .set({ status: "searching", cleanerId: null, serviceOtp: null, otpShared: false })
+      .where(eq(bookingsTable.id, b.id));
+
+    const tried = await db.select({ cleanerId: bookingDispatchesTable.cleanerId })
+      .from(bookingDispatchesTable).where(eq(bookingDispatchesTable.bookingId, b.id));
+    const count = await dispatchToNearestCleaners(
+      b.id, b.customerLat, b.customerLng, tried.map(d => d.cleanerId), MAX_DISPATCH,
+      { vehicleType: b.vehicleType, cleanType: b.cleanType ?? "exterior", address: b.customerAddress, price: b.priceQuoted },
+    );
+    scheduleSearchRetry(b.id, b.customerLat, b.customerLng, b.vehicleType, b.cleanType ?? "exterior", b.customerAddress, b.priceQuoted, now);
+    if (count > 0) reassigned++; else reassignFailed++;
+    console.log(`[Sweep] Booking ${b.id} reassigned — cleaner ${b.cleanerId} went offline; re-dispatched to ${count}`);
+
+    // Let the customer know we're finding a new cleaner.
+    const [customer] = await db.select({ pushToken: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, b.customerId));
+    if (customer?.pushToken) {
+      await sendPush([customer.pushToken], "🔄 Finding you a new cleaner",
+        "Your previous cleaner became unavailable. We're matching you with someone else nearby.",
+        { type: "booking_reassigned", bookingId: b.id });
+    }
+  }
+
+  return { cancelledSearching, reassigned, reassignFailed };
 }

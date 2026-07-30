@@ -1,11 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import session from "express-session";
-import path from "path";
-import { fileURLToPath } from "url";
 import router from "./gateway/index.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app: Express = express();
 
@@ -24,7 +20,8 @@ app.use(session({
   },
 }));
 
-app.use("/api/avatars", express.static(path.join(__dirname, "../public/avatars")));
+// Avatars are now served from the database (see user router GET /api/avatars/:userId),
+// so they survive Render redeploys. No local static mount needed.
 app.use("/api", router);
 
 export default app;

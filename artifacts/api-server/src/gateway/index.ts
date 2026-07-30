@@ -19,6 +19,7 @@ import feedbackRouter    from "../services/feedback/router.js";
 import adminRouter       from "../services/admin/router.js";
 import locationRouter    from "../services/location/router.js";
 import ownerRouter       from "../services/owner/router.js";
+import internalRouter    from "../services/internal/router.js";
 
 const gateway: IRouter = Router();
 
@@ -39,5 +40,6 @@ gateway.use(feedbackRouter);
 gateway.use(adminRouter);
 gateway.use(locationRouter);
 gateway.use(ownerRouter);
+gateway.use(internalRouter);
 
 export default gateway;
