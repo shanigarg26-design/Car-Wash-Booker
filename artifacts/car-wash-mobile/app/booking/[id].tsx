@@ -48,6 +48,15 @@ function OtpDisplay({ otp }: { otp: string }) {
   );
 }
 
+function fmtTime(iso?: string | null): string {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch { return ''; }
+}
+function durationMin(startIso?: string | null, endIso?: string | null): number {
+  if (!startIso || !endIso) return 0;
+  return Math.max(0, Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000));
+}
+
 function openMapsNavigation(lat: number, lng: number, label: string) {
   const url = Platform.OS === 'ios'
     ? `maps://?daddr=${lat},${lng}&dirflg=d`
@@ -290,11 +299,22 @@ export default function BookingDetailScreen() {
   // charge to the time spent, so the customer only pays for what was done.
   const handleStopEarly = () => {
     const doStop = () => mutation.mutate({ action: 'stop' });
-    const msg = 'End this wash early due to an emergency? The customer will only be charged for the time spent so far.';
+    const msg = 'Stop the cleaning now (e.g. an emergency)? Only the time already spent will be charged — not the full amount.';
     if (Platform.OS === 'web') { if (window.confirm(msg)) doStop(); }
-    else Alert.alert('End Wash Early?', msg, [
+    else Alert.alert('Stop Cleaning?', msg, [
       { text: 'Keep Going', style: 'cancel' },
-      { text: 'End Early', style: 'destructive', onPress: doStop },
+      { text: 'Stop Cleaning', style: 'destructive', onPress: doStop },
+    ]);
+  };
+
+  // Customer's assigned washer accepted but isn't showing up — search for a new one.
+  const handleFindNewCleaner = () => {
+    const doIt = () => mutation.mutate({ action: 'find-new-cleaner' });
+    const msg = 'Drop the current cleaner and search for a new one? Your booking stays active — no charge.';
+    if (Platform.OS === 'web') { if (window.confirm(msg)) doIt(); }
+    else Alert.alert('Find a New Cleaner?', msg, [
+      { text: 'Keep Waiting', style: 'cancel' },
+      { text: 'Find New Cleaner', onPress: doIt },
     ]);
   };
 
@@ -809,8 +829,27 @@ export default function BookingDetailScreen() {
           )}
           <View style={styles.detailRow}>
             <AppIcon name="tag" size={16} color={Colors.dark.tint} />
-            <Text style={styles.detailText}>₹{booking.priceQuoted}</Text>
+            <Text style={styles.detailText}>
+              ₹{booking.amountCharged ?? booking.priceQuoted}
+              {booking.amountCharged != null && booking.amountCharged !== booking.priceQuoted ? ` (of ₹${booking.priceQuoted})` : ''}
+            </Text>
           </View>
+          {booking.serviceStartedAt && (
+            <View style={styles.detailRow}>
+              <AppIcon name="clock" size={16} color={Colors.dark.tint} />
+              <Text style={styles.detailText}>
+                Started {fmtTime(booking.serviceStartedAt)}
+                {booking.completedAt ? `  ·  Ended ${fmtTime(booking.completedAt)}` : ''}
+                {booking.serviceStartedAt && booking.completedAt ? `  (${durationMin(booking.serviceStartedAt, booking.completedAt)} min)` : ''}
+              </Text>
+            </View>
+          )}
+          {booking.stoppedEarly && (
+            <View style={styles.detailRow}>
+              <AppIcon name="alert-triangle" size={16} color="#F59E0B" />
+              <Text style={[styles.detailText, { color: '#F59E0B' }]}>Ended early by {booking.stoppedBy === 'customer' ? 'customer' : 'cleaner'} — charged for time spent</Text>
+            </View>
+          )}
 
           {['accepted', 'arrived', 'in_progress'].includes(booking.status) && (isWasher ? booking.customerName : booking.washerName) && (
             <TouchableOpacity style={styles.chatBtn} onPress={() => router.push(`/chat/${id}`)} activeOpacity={0.8}>
@@ -834,7 +873,15 @@ export default function BookingDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {/* CUSTOMER: Cancel when cleaner accepted/arrived */}
+        {/* CUSTOMER: cleaner accepted but not showing up → find another (no charge) */}
+        {(isAccepted || isArrived) && !isWasher && (
+          <TouchableOpacity style={styles.findNewBtn} onPress={handleFindNewCleaner} disabled={mutation.isPending}>
+            <AppIcon name="refresh-cw" size={18} color="#FFF" />
+            <Text style={styles.findNewBtnText}>Search for a new cleaner</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* CUSTOMER: Cancel when cleaner accepted/arrived (free — no charge) */}
         {(isAccepted || isArrived) && !isWasher && (
           <TouchableOpacity
             style={styles.cancelBtn}
@@ -843,7 +890,7 @@ export default function BookingDetailScreen() {
           >
             {cancelling
               ? <ActivityIndicator color={Colors.dark.text} />
-              : <Text style={styles.cancelBtnText}>Cancel Booking</Text>}
+              : <Text style={styles.cancelBtnText}>Cancel Booking (no charge)</Text>}
           </TouchableOpacity>
         )}
 
@@ -911,11 +958,12 @@ export default function BookingDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {/* WASHER: End early (emergency) — customer charged only for time spent */}
-        {isInProgress && isWasher && (
-          <TouchableOpacity style={styles.endEarlyBtn} onPress={handleStopEarly} disabled={mutation.isPending}>
-            <AppIcon name="x" size={18} color={Colors.dark.tabIconDefault} />
-            <Text style={styles.endEarlyBtnText}>End early (emergency)</Text>
+        {/* EITHER PARTY: Stop cleaning mid-service (emergency) — charged only for
+            time spent. Distinct from Cancel (which is free). */}
+        {isInProgress && (
+          <TouchableOpacity style={styles.stopBtn} onPress={handleStopEarly} disabled={mutation.isPending}>
+            <AppIcon name="alert-triangle" size={18} color="#F59E0B" />
+            <Text style={styles.stopBtnText}>Stop cleaning (charged for time spent)</Text>
           </TouchableOpacity>
         )}
 
@@ -1239,6 +1287,17 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.dark.border,
   },
   endEarlyBtnText: { color: Colors.dark.tabIconDefault, fontWeight: '600', fontSize: 14 },
+  findNewBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: Colors.dark.tint, borderRadius: 14, paddingVertical: 15, marginBottom: 10,
+  },
+  findNewBtnText: { color: '#FFF', fontWeight: '700', fontSize: 15 },
+  stopBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 10, paddingVertical: 13, borderRadius: 12,
+    borderWidth: 1, borderColor: '#F59E0B',
+  },
+  stopBtnText: { color: '#F59E0B', fontWeight: '700', fontSize: 14 },
   earlyStopNote: { color: '#F59E0B', fontSize: 12, marginTop: 8, lineHeight: 17 },
   washerActionRow: { flexDirection: 'row', gap: 10 },
   navBtn: {
