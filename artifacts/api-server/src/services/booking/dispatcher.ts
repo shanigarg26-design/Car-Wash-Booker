@@ -9,7 +9,7 @@
  * so it can be moved to a separate process or message queue in the future.
  */
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
-import { eq, and, gte, lt, inArray } from "drizzle-orm";
+import { eq, and, gte, lt, lte, inArray } from "drizzle-orm";
 import { sendPush } from "../../shared/push.js";
 
 export const MAX_DISPATCH           = 5;
@@ -216,9 +216,24 @@ export function scheduleSearchRetry(
  *
  * Returns a summary for logging/observability.
  */
-export async function sweepStaleBookings(): Promise<{ cancelledSearching: number; reassigned: number; reassignFailed: number }> {
+export async function sweepStaleBookings(): Promise<{ cancelledSearching: number; reassigned: number; reassignFailed: number; promotedScheduled: number }> {
   const now = Date.now();
-  let cancelledSearching = 0, reassigned = 0, reassignFailed = 0;
+  let cancelledSearching = 0, reassigned = 0, reassignFailed = 0, promotedScheduled = 0;
+
+  // 0) Promote SCHEDULED bookings whose time has arrived → start searching + dispatch.
+  const dueScheduled = await db.select().from(bookingsTable).where(
+    and(eq(bookingsTable.status, "scheduled"), lte(bookingsTable.scheduledAt, new Date())),
+  );
+  for (const b of dueScheduled) {
+    const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
+      .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
+    if (!promoted) continue;
+    await dispatchToNearestCleaners(b.id, b.customerLat, b.customerLng, [], MAX_DISPATCH,
+      { vehicleType: b.vehicleType, cleanType: b.cleanType ?? "exterior", address: b.customerAddress, price: b.priceQuoted });
+    scheduleSearchRetry(b.id, b.customerLat, b.customerLng, b.vehicleType, b.cleanType ?? "exterior", b.customerAddress, b.priceQuoted, now);
+    promotedScheduled++;
+    console.log(`[Sweep] Scheduled booking ${b.id} promoted to searching`);
+  }
 
   // 1) Expire overdue "searching" bookings
   const staleSearching = await db.select().from(bookingsTable).where(
@@ -272,5 +287,5 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
     }
   }
 
-  return { cancelledSearching, reassigned, reassignFailed };
+  return { cancelledSearching, reassigned, reassignFailed, promotedScheduled };
 }

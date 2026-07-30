@@ -196,6 +196,7 @@ export const UpdateMyWasherProfileResponse = zod.object({
 });
 
 const BookingStatusEnum = zod.enum([
+  "scheduled",
   "searching",
   "accepted",
   "arrived",
@@ -250,6 +251,8 @@ export const CreateBookingBody = zod.object({
   notes: zod.string().nullish(),
   vehicleType: zod.string().nullish(),
   washType: zod.enum(["exterior", "both"]).default("exterior"),
+  // ISO timestamp for a future booking. Omit/past → book now.
+  scheduledAt: zod.string().nullish(),
 });
 
 /**

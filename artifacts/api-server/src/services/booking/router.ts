@@ -106,7 +106,16 @@ router.post("/bookings", async (req, res): Promise<void> => {
   const parsed = CreateBookingBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  const { customerAddress, customerLat, customerLng, notes, vehicleType, washType } = parsed.data;
+  const { customerAddress, customerLat, customerLng, notes, vehicleType, washType, scheduledAt } = parsed.data;
+
+  // A future scheduledAt (>1 min ahead) makes this a SCHEDULED booking: it waits
+  // until its time, then the sweep cron promotes it to "searching" and dispatches.
+  let scheduledFor = new Date();
+  let isScheduled = false;
+  if (scheduledAt) {
+    const dt = new Date(scheduledAt);
+    if (!isNaN(dt.getTime()) && dt.getTime() > Date.now() + 60_000) { scheduledFor = dt; isScheduled = true; }
+  }
 
   // Defensive length caps — the app sends short values, but reject abusive payloads.
   if (customerAddress.length > 500) { res.status(400).json({ error: "address_too_long", message: "Address is too long." }); return; }
@@ -145,20 +154,57 @@ router.post("/bookings", async (req, res): Promise<void> => {
 
   const [booking] = await db.insert(bookingsTable).values({
     customerId: userId, cleanerId: null, customerAddress,
-    customerLat: lat, customerLng: lng, scheduledAt: new Date(),
+    customerLat: lat, customerLng: lng, scheduledAt: scheduledFor,
     notes: notes ?? null, vehicleType: vehicleType ?? null,
-    cleanType: cleanTypeFinal, priceQuoted: price, status: "searching",
+    cleanType: cleanTypeFinal, priceQuoted: price, status: isScheduled ? "scheduled" : "searching",
     subscriptionId: coveringSub?.id ?? null,
   }).returning();
 
-  await dispatchToNearestCleaners(booking.id, lat, lng, [], MAX_DISPATCH, {
-    vehicleType: vehicleType ?? null, cleanType: cleanTypeFinal, address: customerAddress, price,
-  });
-
-  scheduleSearchRetry(booking.id, lat, lng, vehicleType ?? null, cleanTypeFinal, customerAddress, price, Date.now());
+  // Only dispatch immediate bookings. Scheduled ones are picked up at their time
+  // by the sweep cron (promoteScheduledBookings in dispatcher.ts).
+  if (!isScheduled) {
+    await dispatchToNearestCleaners(booking.id, lat, lng, [], MAX_DISPATCH, {
+      vehicleType: vehicleType ?? null, cleanType: cleanTypeFinal, address: customerAddress, price,
+    });
+    scheduleSearchRetry(booking.id, lat, lng, vehicleType ?? null, cleanTypeFinal, customerAddress, price, Date.now());
+  }
 
   const enriched = await enrichBooking(booking);
   res.status(201).json(GetBookingResponse.parse(enriched));
+});
+
+// ── PATCH /api/bookings/:id/edit ──────────────────────────────────────────────
+// Customer changes vehicle / wash type / notes BEFORE a cleaner accepts. Price is
+// recomputed and package coverage re-evaluated.
+router.patch("/bookings/:id/edit", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const bookingId = parseInt(req.params.id, 10);
+  if (isNaN(bookingId)) { res.status(400).json({ error: "Invalid booking ID" }); return; }
+
+  const { vehicleType, washType, notes } = req.body as { vehicleType?: string; washType?: string; notes?: string };
+
+  const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
+  if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+  if (booking.customerId !== userId) { res.status(403).json({ error: "Not your booking" }); return; }
+  if (!["searching", "scheduled"].includes(booking.status)) {
+    res.status(409).json({ error: "cannot_edit", message: "You can only edit a booking before a cleaner accepts it." }); return;
+  }
+  if (notes != null && notes.length > 1000) { res.status(400).json({ error: "notes_too_long", message: "Notes are too long." }); return; }
+
+  const newVehicle = vehicleType !== undefined ? vehicleType : booking.vehicleType;
+  const newClean   = washType === "both" || washType === "exterior" ? washType : (booking.cleanType ?? "exterior");
+  const newPrice   = calcPrice(newVehicle, newClean);
+  const coveringSub = await findCoveringSubscription(userId, newVehicle ?? null, newClean);
+
+  const [updated] = await db.update(bookingsTable).set({
+    vehicleType: newVehicle, cleanType: newClean, priceQuoted: newPrice,
+    notes: notes !== undefined ? notes : booking.notes,
+    subscriptionId: coveringSub?.id ?? null,
+  }).where(eq(bookingsTable.id, bookingId)).returning();
+
+  res.json(GetBookingResponse.parse(await enrichBooking(updated)));
 });
 
 // ── GET /api/bookings/:id/nearby-cleaners ─────────────────────────────────────
