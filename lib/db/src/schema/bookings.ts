@@ -20,8 +20,12 @@ export const bookingsTable = pgTable("bookings", {
   amountCharged: integer("amount_charged"),
   // When the wash actually started (status → in_progress) — basis for time-proration.
   serviceStartedAt: timestamp("service_started_at", { withTimezone: true }),
-  // True when the washer ended the job early (e.g. an emergency).
+  // When the wash finished (completed normally OR stopped early). For history.
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  // True when the job was ended early (emergency) — by either party.
   stoppedEarly: boolean("stopped_early").notNull().default(false),
+  // Who stopped it early: "customer" | "cleaner" (null if a normal full completion).
+  stoppedBy: text("stopped_by"),
   // Set when this booking is covered by a prepaid package (customer owes ₹0).
   subscriptionId: integer("subscription_id"),
   // Set when the washer was nudged that the wash is running over the expected time

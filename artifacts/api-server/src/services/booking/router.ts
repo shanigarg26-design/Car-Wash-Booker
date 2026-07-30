@@ -474,7 +474,7 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
   // Covered by a prepaid package → customer owes ₹0 and one wash is consumed.
   // Otherwise a normal, full completion at the quoted price.
   const chargeAmt = existing.subscriptionId ? 0 : existing.priceQuoted;
-  const [booking] = await db.update(bookingsTable).set({ status: "completed", amountCharged: chargeAmt }).where(eq(bookingsTable.id, params.data.id)).returning();
+  const [booking] = await db.update(bookingsTable).set({ status: "completed", amountCharged: chargeAmt, completedAt: new Date() }).where(eq(bookingsTable.id, params.data.id)).returning();
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
 
   if (existing.subscriptionId) {
@@ -491,9 +491,10 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
 });
 
 // ── PATCH /api/bookings/:id/stop ──────────────────────────────────────────────
-// The washer has to end the wash early (e.g. an emergency). The customer is
-// charged only for the time actually spent, auto-prorated from when the service
-// started. The booking is marked completed-but-stopped-early.
+// EITHER party (the assigned washer OR the customer) can stop the wash mid-service
+// (e.g. an emergency). The customer is charged only for the time actually spent,
+// auto-prorated from when the service started. Marked completed + stopped-early.
+// This is DIFFERENT from cancel — a cancel is free; a stop bills for time spent.
 router.patch("/bookings/:id/stop", async (req, res): Promise<void> => {
   const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
@@ -501,20 +502,22 @@ router.patch("/bookings/:id/stop", async (req, res): Promise<void> => {
   const bookingId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   if (isNaN(bookingId)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [cleaner] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
-  if (!cleaner) { res.status(403).json({ error: "Not a cleaner" }); return; }
-
   const [existing] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
   if (!existing) { res.status(404).json({ error: "Booking not found" }); return; }
-  if (existing.cleanerId !== cleaner.id) { res.status(403).json({ error: "You are not assigned to this booking" }); return; }
+
+  const [cleaner] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+  const isAssignedCleaner = !!cleaner && existing.cleanerId === cleaner.id;
+  const isCustomer        = existing.customerId === userId;
+  if (!isAssignedCleaner && !isCustomer) { res.status(403).json({ error: "Not authorized to stop this booking" }); return; }
   if (existing.status !== "in_progress") { res.status(409).json({ error: "not_in_progress", message: "You can only stop a wash that is in progress." }); return; }
 
+  const stoppedBy = isCustomer ? "customer" : "cleaner";
   const { amount, fraction, minutesSpent } = calcProratedAmount(existing.priceQuoted, existing.cleanType, existing.serviceStartedAt);
   // A package-covered wash is already prepaid → the customer owes ₹0 even if stopped early.
   const chargeAmt = existing.subscriptionId ? 0 : amount;
 
   const [booking] = await db.update(bookingsTable)
-    .set({ status: "completed", stoppedEarly: true, amountCharged: chargeAmt })
+    .set({ status: "completed", stoppedEarly: true, stoppedBy, amountCharged: chargeAmt, completedAt: new Date() })
     .where(eq(bookingsTable.id, bookingId)).returning();
 
   if (existing.subscriptionId) {
@@ -523,16 +526,61 @@ router.patch("/bookings/:id/stop", async (req, res): Promise<void> => {
   }
 
   const enriched = await enrichBooking(booking);
-  if (enriched._customerPushToken) {
-    const msg = existing.subscriptionId
-      ? `Your cleaner had to stop after ~${minutesSpent} min. This wash was covered by your package.`
-      : `Your cleaner had to stop after ~${minutesSpent} min. You only pay for time spent: ₹${amount} (of ₹${existing.priceQuoted}).`;
-    await sendPush([enriched._customerPushToken], "⚠️ Wash ended early", msg,
-      { type: "service_stopped", bookingId, amountCharged: chargeAmt });
+  const who = isCustomer ? "The customer" : "Your cleaner";
+  const money = existing.subscriptionId ? "This wash was covered by your package." : `Amount for time spent: ₹${amount} (of ₹${existing.priceQuoted}).`;
+  // Notify the OTHER party.
+  const notifyToken = isCustomer ? enriched._cleanerPushToken : enriched._customerPushToken;
+  if (notifyToken) {
+    await sendPush([notifyToken], "⚠️ Wash ended early",
+      `${who} stopped the wash after ~${minutesSpent} min. ${money}`,
+      { type: "service_stopped", bookingId, amountCharged: chargeAmt, stoppedBy });
   }
 
-  console.log(`[Stop] Booking ${bookingId} stopped early at ${Math.round(fraction * 100)}% → ₹${amount}`);
+  console.log(`[Stop] Booking ${bookingId} stopped early by ${stoppedBy} at ${Math.round(fraction * 100)}% → ₹${chargeAmt}`);
   res.json(GetBookingResponse.parse(enriched));
+});
+
+// ── PATCH /api/bookings/:id/find-new-cleaner ──────────────────────────────────
+// The customer's assigned washer accepted but isn't responding/showing up. The
+// customer frees this washer and restarts the search for a NEW one. No charge —
+// this only re-dispatches; the previous washer is dropped. (Different from cancel.)
+router.patch("/bookings/:id/find-new-cleaner", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const bookingId = parseInt(req.params.id, 10);
+  if (isNaN(bookingId)) { res.status(400).json({ error: "Invalid booking ID" }); return; }
+
+  const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
+  if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+  if (booking.customerId !== userId) { res.status(403).json({ error: "Not your booking" }); return; }
+  if (!["accepted", "arrived"].includes(booking.status)) {
+    res.status(409).json({ error: "cannot_reassign", message: "You can only search for a new cleaner before the wash starts." }); return;
+  }
+
+  const oldCleanerId = booking.cleanerId;
+  // Drop the current washer's dispatch, and notify them.
+  if (oldCleanerId) {
+    await db.update(bookingDispatchesTable).set({ status: "cleaner_cancelled" })
+      .where(and(eq(bookingDispatchesTable.bookingId, bookingId), eq(bookingDispatchesTable.cleanerId, oldCleanerId)));
+    try {
+      const [cu] = await db.select({ token: usersTable.expoPushToken }).from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id)).where(eq(cleanersTable.id, oldCleanerId));
+      if (cu?.token) await sendPush([cu.token], "🔄 Booking reassigned", "The customer is searching for another cleaner for this booking.", { type: "booking_reassigned", bookingId });
+    } catch { /* non-critical */ }
+  }
+
+  const [updated] = await db.update(bookingsTable)
+    .set({ status: "searching", cleanerId: null, otpShared: false, serviceOtp: null })
+    .where(eq(bookingsTable.id, bookingId)).returning();
+
+  // Re-dispatch excluding everyone already tried (incl. the dropped washer).
+  const tried = await db.select({ cleanerId: bookingDispatchesTable.cleanerId }).from(bookingDispatchesTable).where(eq(bookingDispatchesTable.bookingId, bookingId));
+  const dispatched = await dispatchToNearestCleaners(bookingId, booking.customerLat, booking.customerLng, tried.map(d => d.cleanerId), MAX_DISPATCH,
+    { vehicleType: booking.vehicleType, cleanType: booking.cleanType ?? "exterior", address: booking.customerAddress, price: booking.priceQuoted });
+  scheduleSearchRetry(bookingId, booking.customerLat, booking.customerLng, booking.vehicleType, booking.cleanType ?? "exterior", booking.customerAddress, booking.priceQuoted, Date.now());
+
+  console.log(`[FindNewCleaner] Booking ${bookingId} reassigned by customer; re-dispatched to ${dispatched} cleaner(s)`);
+  res.json(GetBookingResponse.parse(await enrichBooking(updated)));
 });
 
 // ── PATCH /api/bookings/:id/cleaner-cancel ────────────────────────────────────
