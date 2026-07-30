@@ -24,6 +24,9 @@ export const bookingsTable = pgTable("bookings", {
   stoppedEarly: boolean("stopped_early").notNull().default(false),
   // Set when this booking is covered by a prepaid package (customer owes ₹0).
   subscriptionId: integer("subscription_id"),
+  // Set when the washer was nudged that the wash is running over the expected time
+  // (prevents repeat nudges).
+  overrunNudgedAt: timestamp("overrun_nudged_at", { withTimezone: true }),
   serviceOtp: text("service_otp"),
   otpShared: boolean("otp_shared").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

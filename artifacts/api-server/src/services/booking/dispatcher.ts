@@ -9,8 +9,9 @@
  * so it can be moved to a separate process or message queue in the future.
  */
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
-import { eq, and, gte, lt, lte, inArray } from "drizzle-orm";
+import { eq, and, gte, lt, lte, inArray, isNull } from "drizzle-orm";
 import { sendPush } from "../../shared/push.js";
+import { expectedDurationMin } from "./service.js";
 
 export const MAX_DISPATCH           = 5;
 export const MAX_DISPATCH_RADIUS_KM = 5;
@@ -216,7 +217,7 @@ export function scheduleSearchRetry(
  *
  * Returns a summary for logging/observability.
  */
-export async function sweepStaleBookings(): Promise<{ cancelledSearching: number; reassigned: number; reassignFailed: number; promotedScheduled: number }> {
+export async function sweepStaleBookings(): Promise<{ cancelledSearching: number; reassigned: number; reassignFailed: number; promotedScheduled: number; nudgedOverrun: number }> {
   const now = Date.now();
   let cancelledSearching = 0, reassigned = 0, reassignFailed = 0, promotedScheduled = 0;
 
@@ -287,5 +288,31 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
     }
   }
 
-  return { cancelledSearching, reassigned, reassignFailed, promotedScheduled };
+  // 3) Nudge washers whose in-progress wash is running OVER the expected time
+  //    (30 min exterior / 45 min full). One nudge per booking (overrunNudgedAt guards).
+  let nudgedOverrun = 0;
+  const running = await db.select().from(bookingsTable).where(
+    and(eq(bookingsTable.status, "in_progress"), isNull(bookingsTable.overrunNudgedAt)),
+  );
+  for (const b of running) {
+    if (!b.serviceStartedAt || !b.cleanerId) continue;
+    const expMin = expectedDurationMin(b.cleanType);
+    const elapsedMin = (now - b.serviceStartedAt.getTime()) / 60000;
+    if (elapsedMin < expMin) continue;
+
+    const [cu] = await db
+      .select({ token: usersTable.expoPushToken })
+      .from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
+      .where(eq(cleanersTable.id, b.cleanerId));
+    if (cu?.token) {
+      await sendPush([cu.token], "⏱️ Wash running over time",
+        `This wash has passed the expected ${expMin} min. Please wrap up soon or let the customer know.`,
+        { type: "wash_overrun", bookingId: b.id });
+    }
+    await db.update(bookingsTable).set({ overrunNudgedAt: new Date() }).where(eq(bookingsTable.id, b.id));
+    nudgedOverrun++;
+    console.log(`[Sweep] Booking ${b.id} overrun nudge sent (${Math.round(elapsedMin)} min > ${expMin} min)`);
+  }
+
+  return { cancelledSearching, reassigned, reassignFailed, promotedScheduled, nudgedOverrun };
 }

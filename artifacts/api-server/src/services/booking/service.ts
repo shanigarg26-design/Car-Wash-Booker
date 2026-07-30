@@ -62,7 +62,14 @@ export function priceForPackage(pkg: PackagePlan, vehicleType: string | null | u
 
 // Expected hands-on wash time (minutes) by clean type — the basis for prorating
 // the charge when a washer has to stop mid-service.
-const EXPECTED_DURATION_MIN: Record<string, number> = { exterior: 20, both: 40 };
+// Expected service time (minutes). Basis for both prorating an early stop AND the
+// "running over time" nudge. Research-set: exterior-only ≈ 30 min; full (ext+int) ≈ 45 min.
+const EXPECTED_DURATION_MIN: Record<string, number> = { exterior: 30, both: 45 };
+
+/** Expected wash duration (minutes) for a clean type. */
+export function expectedDurationMin(cleanType: string | null | undefined): number {
+  return EXPECTED_DURATION_MIN[cleanType ?? "exterior"] ?? 30;
+}
 
 /**
  * Computes the amount owed when a wash is ENDED EARLY, prorated by how much of the
@@ -76,7 +83,7 @@ export function calcProratedAmount(
   serviceStartedAt: Date | null,
   now: Date = new Date(),
 ): { amount: number; fraction: number; minutesSpent: number } {
-  const expectedMin = EXPECTED_DURATION_MIN[cleanType ?? "exterior"] ?? 20;
+  const expectedMin = EXPECTED_DURATION_MIN[cleanType ?? "exterior"] ?? 30;
   const minutesSpent = serviceStartedAt ? Math.max(0, (now.getTime() - serviceStartedAt.getTime()) / 60000) : 0;
   const fraction = Math.min(1, Math.max(0.1, minutesSpent / expectedMin));
   const amount = Math.round(priceQuoted * fraction);
