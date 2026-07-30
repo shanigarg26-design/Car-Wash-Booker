@@ -1,0 +1,95 @@
+name: Ops — API troubleshooting (no UI)
+
+# Troubleshoot Render + Expo from ANY device, no dashboards, using the repo's
+# encrypted secrets (RENDER_API_KEY, EXPO_TOKEN) — the secrets are never exposed.
+#
+#   Trigger:  gh workflow run ops.yml -f action=status
+#   Read it:  gh run list --workflow ops.yml -L1   then   gh run view <id> --log
+#
+# actions: status | render-service | render-deploys | render-logs | expo-builds | expo-updates
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to check"
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - render-service
+          - render-deploys
+          - render-logs
+          - expo-builds
+          - expo-updates
+      limit:
+        description: "How many rows / log lines"
+        required: false
+        default: "20"
+
+env:
+  RENDER_SERVICE: srv-d9kr4fijnfac739oerk0
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for Expo commands)
+        if: ${{ startsWith(inputs.action, 'expo') || inputs.action == 'status' }}
+        uses: actions/checkout@v4
+
+      - name: Render — service info
+        if: ${{ inputs.action == 'render-service' }}
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$RENDER_SERVICE" \
+            | jq '{name, type, suspended, autoDeploy, branch, dashboardUrl}'
+
+      - name: Render — recent deploys
+        if: ${{ inputs.action == 'render-deploys' || inputs.action == 'status' }}
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          echo "### Render — recent deploys"
+          curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$RENDER_SERVICE/deploys?limit=${{ inputs.limit }}" \
+            | jq -r '.[].deploy | "\(.finishedAt // .createdAt)  [\(.status)]  \(.commit.message | split("\n")[0])"'
+
+      - name: Render — recent logs
+        if: ${{ inputs.action == 'render-logs' }}
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          OWNER=$(curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$RENDER_SERVICE" | jq -r '.ownerId')
+          echo "### Render — logs (owner=$OWNER)"
+          curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/logs?ownerId=$OWNER&resource[]=$RENDER_SERVICE&limit=${{ inputs.limit }}" \
+            | jq -r '(.logs // [])[] | "\(.timestamp)  \(.message)"' \
+            || echo "(no logs returned — free-plan retention is limited)"
+
+      - name: Expo — recent builds
+        if: ${{ inputs.action == 'expo-builds' || inputs.action == 'status' }}
+        working-directory: artifacts/car-wash-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npm i -g eas-cli >/dev/null 2>&1
+          echo "### Expo — recent Android builds"
+          eas build:list --platform android --limit ${{ inputs.limit }} --non-interactive --json 2>/dev/null \
+            | jq -r '.[] | "\(.createdAt)  [\(.status)]  \((.gitCommitHash // "")[0:7])"' \
+            || eas build:list --platform android --limit 5 --non-interactive
+
+      - name: Expo — recent updates
+        if: ${{ inputs.action == 'expo-updates' }}
+        working-directory: artifacts/car-wash-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npm i -g eas-cli >/dev/null 2>&1
+          echo "### Expo — recent updates (channel preview)"
+          eas update:list --branch preview --limit ${{ inputs.limit }} --non-interactive 2>/dev/null \
+            || eas update:list --limit 10 --non-interactive
