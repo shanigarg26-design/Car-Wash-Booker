@@ -35,6 +35,29 @@ export function generateServiceOtp(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
+// Expected hands-on wash time (minutes) by clean type — the basis for prorating
+// the charge when a washer has to stop mid-service.
+const EXPECTED_DURATION_MIN: Record<string, number> = { exterior: 20, both: 40 };
+
+/**
+ * Computes the amount owed when a wash is ENDED EARLY, prorated by how much of the
+ * expected time was actually spent. The customer only pays for time spent.
+ *   charge = round(price * clamp(elapsed / expected, 0.1 .. 1))
+ * A small 10% floor covers setup/arrival effort even if stopped almost immediately.
+ */
+export function calcProratedAmount(
+  priceQuoted: number,
+  cleanType: string | null | undefined,
+  serviceStartedAt: Date | null,
+  now: Date = new Date(),
+): { amount: number; fraction: number; minutesSpent: number } {
+  const expectedMin = EXPECTED_DURATION_MIN[cleanType ?? "exterior"] ?? 20;
+  const minutesSpent = serviceStartedAt ? Math.max(0, (now.getTime() - serviceStartedAt.getTime()) / 60000) : 0;
+  const fraction = Math.min(1, Math.max(0.1, minutesSpent / expectedMin));
+  const amount = Math.round(priceQuoted * fraction);
+  return { amount, fraction, minutesSpent: Math.round(minutesSpent) };
+}
+
 /**
  * Enriches a raw booking DB row with joined customer + cleaner data.
  * Returns a rich object ready to be serialised as an API response.
@@ -111,6 +134,9 @@ export async function enrichBooking(booking: typeof bookingsTable.$inferSelect) 
     cleanType:                 booking.cleanType ?? "exterior",
     washType:                  booking.cleanType ?? "exterior",
     priceQuoted:               booking.priceQuoted,
+    amountCharged:             booking.amountCharged ?? null,
+    stoppedEarly:              booking.stoppedEarly ?? false,
+    serviceStartedAt:          booking.serviceStartedAt ? booking.serviceStartedAt.toISOString() : null,
     serviceOtp:                booking.serviceOtp ?? null,
     otpShared:                 booking.otpShared  ?? false,
     createdAt:                 booking.createdAt.toISOString(),

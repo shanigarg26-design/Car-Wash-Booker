@@ -17,7 +17,7 @@ import {
   ListBookingsResponse,
   GetBookingResponse,
 } from "@workspace/api-zod";
-import { enrichBooking, calcPrice, generateServiceOtp } from "./service.js";
+import { enrichBooking, calcPrice, generateServiceOtp, calcProratedAmount } from "./service.js";
 import { dispatchToNearestCleaners, scheduleSearchRetry, cancelRetry, MAX_DISPATCH, MAX_DISPATCH_RADIUS_KM, haversineKm } from "./dispatcher.js";
 import { sendPush } from "../../shared/push.js";
 
@@ -386,7 +386,7 @@ router.patch("/bookings/:id/start", async (req, res): Promise<void> => {
   }
   otpAttempts.delete(bookingId); // correct OTP → clear counter
 
-  const [updated] = await db.update(bookingsTable).set({ status: "in_progress" }).where(eq(bookingsTable.id, bookingId)).returning();
+  const [updated] = await db.update(bookingsTable).set({ status: "in_progress", serviceStartedAt: new Date() }).where(eq(bookingsTable.id, bookingId)).returning();
   const enriched  = await enrichBooking(updated);
 
   if (enriched._customerPushToken) {
@@ -419,7 +419,8 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
     res.status(409).json({ error: "not_in_progress", message: "The service must be started (via the customer's OTP) before it can be completed." }); return;
   }
 
-  const [booking] = await db.update(bookingsTable).set({ status: "completed" }).where(eq(bookingsTable.id, params.data.id)).returning();
+  // A normal, full completion — the customer owes the full quoted price.
+  const [booking] = await db.update(bookingsTable).set({ status: "completed", amountCharged: existing.priceQuoted }).where(eq(bookingsTable.id, params.data.id)).returning();
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
 
   if (booking.cleanerId) {
@@ -428,6 +429,42 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
   }
 
   res.json(GetBookingResponse.parse(await enrichBooking(booking)));
+});
+
+// ── PATCH /api/bookings/:id/stop ──────────────────────────────────────────────
+// The washer has to end the wash early (e.g. an emergency). The customer is
+// charged only for the time actually spent, auto-prorated from when the service
+// started. The booking is marked completed-but-stopped-early.
+router.patch("/bookings/:id/stop", async (req, res): Promise<void> => {
+  const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const bookingId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(bookingId)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [cleaner] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+  if (!cleaner) { res.status(403).json({ error: "Not a cleaner" }); return; }
+
+  const [existing] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
+  if (!existing) { res.status(404).json({ error: "Booking not found" }); return; }
+  if (existing.cleanerId !== cleaner.id) { res.status(403).json({ error: "You are not assigned to this booking" }); return; }
+  if (existing.status !== "in_progress") { res.status(409).json({ error: "not_in_progress", message: "You can only stop a wash that is in progress." }); return; }
+
+  const { amount, fraction, minutesSpent } = calcProratedAmount(existing.priceQuoted, existing.cleanType, existing.serviceStartedAt);
+
+  const [booking] = await db.update(bookingsTable)
+    .set({ status: "completed", stoppedEarly: true, amountCharged: amount })
+    .where(eq(bookingsTable.id, bookingId)).returning();
+
+  const enriched = await enrichBooking(booking);
+  if (enriched._customerPushToken) {
+    await sendPush([enriched._customerPushToken], "⚠️ Wash ended early",
+      `Your cleaner had to stop after ~${minutesSpent} min. You only pay for time spent: ₹${amount} (of ₹${existing.priceQuoted}).`,
+      { type: "service_stopped", bookingId, amountCharged: amount });
+  }
+
+  console.log(`[Stop] Booking ${bookingId} stopped early at ${Math.round(fraction * 100)}% → ₹${amount}`);
+  res.json(GetBookingResponse.parse(enriched));
 });
 
 // ── PATCH /api/bookings/:id/cleaner-cancel ────────────────────────────────────
