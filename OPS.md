@@ -53,6 +53,11 @@ runner and never handled in chat.
 - **DB password** — NOT rotated (not needed): the connection string never passed through chat
   (the safety classifier blocked it every time), so it was never exposed. SQL is now no-UI via the
   `sql` action, which reads the URL from Render at runtime.
-- **API keys** (`RENDER_API_KEY`, `NEON_API_KEY`, Appetize token) — still PENDING rotation; these
-  were pasted into chat during setup. Rotate when convenient: create new → `gh secret set` /
-  update Appetize → delete old.
+- **Neon API key** — ROTATED (2026-07-30). Done fully via Neon's API: new key created, `NEON_API_KEY`
+  secret updated (piped, value never printed), old key `3228695` revoked (now 401). Verified via a
+  `neon-status` run. The Neon key pasted in chat during setup is dead.
+- **Render API key** — regenerate in the Render dashboard (Account Settings → API Keys), then update
+  the `RENDER_API_KEY` GitHub secret (github.com → repo → Settings → Secrets and variables → Actions).
+  Render has NO API for key management, so this step is UI-only (doable from a phone browser).
+- **Appetize token** — regenerate in Appetize account settings. It is NOT stored as a GitHub secret
+  (was only used ad-hoc for the emulator), so nothing else to update; regenerating kills the old one.
