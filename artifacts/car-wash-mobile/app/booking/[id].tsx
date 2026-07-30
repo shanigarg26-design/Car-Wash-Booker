@@ -286,6 +286,18 @@ export default function BookingDetailScreen() {
     ]);
   };
 
+  // Washer has an emergency and must stop mid-wash. The backend auto-prorates the
+  // charge to the time spent, so the customer only pays for what was done.
+  const handleStopEarly = () => {
+    const doStop = () => mutation.mutate({ action: 'stop' });
+    const msg = 'End this wash early due to an emergency? The customer will only be charged for the time spent so far.';
+    if (Platform.OS === 'web') { if (window.confirm(msg)) doStop(); }
+    else Alert.alert('End Wash Early?', msg, [
+      { text: 'Keep Going', style: 'cancel' },
+      { text: 'End Early', style: 'destructive', onPress: doStop },
+    ]);
+  };
+
   const handleNavigate = () => {
     if (!booking?.customerLat || !booking?.customerLng) {
       Alert.alert('No location', 'Customer location is not available.');
@@ -315,7 +327,7 @@ export default function BookingDetailScreen() {
 
         <View style={styles.celebCard}>
           <View style={styles.celebStat}>
-            <Text style={styles.celebStatValue}>₹{booking.priceQuoted}</Text>
+            <Text style={styles.celebStatValue}>₹{booking.amountCharged ?? booking.priceQuoted}</Text>
             <Text style={styles.celebStatLabel}>Earned Today</Text>
           </View>
           <View style={styles.celebDivider} />
@@ -722,8 +734,13 @@ export default function BookingDetailScreen() {
                 </View>
                 <View style={styles.paymentRow}>
                   <Text style={styles.paymentLabel}>Amount Due</Text>
-                  <Text style={styles.paymentAmount}>₹{booking.priceQuoted}</Text>
+                  <Text style={styles.paymentAmount}>₹{booking.amountCharged ?? booking.priceQuoted}</Text>
                 </View>
+                {booking.stoppedEarly && (
+                  <Text style={styles.earlyStopNote}>
+                    Your cleaner had to end early — you're only charged for the time spent (original quote ₹{booking.priceQuoted}).
+                  </Text>
+                )}
                 <View style={[styles.paymentRow, { marginTop: 6 }]}>
                   <Text style={styles.paymentLabel}>Pay Mode</Text>
                   <View style={styles.cashBadge}>
@@ -732,7 +749,7 @@ export default function BookingDetailScreen() {
                   </View>
                 </View>
                 <Text style={styles.paymentNote}>
-                  Please hand ₹{booking.priceQuoted} in cash directly to your cleaner.
+                  Please hand ₹{booking.amountCharged ?? booking.priceQuoted} in cash directly to your cleaner.
                 </Text>
               </View>
             )}
@@ -879,6 +896,14 @@ export default function BookingDetailScreen() {
           </TouchableOpacity>
         )}
 
+        {/* WASHER: End early (emergency) — customer charged only for time spent */}
+        {isInProgress && isWasher && (
+          <TouchableOpacity style={styles.endEarlyBtn} onPress={handleStopEarly} disabled={mutation.isPending}>
+            <AppIcon name="x" size={18} color={Colors.dark.tabIconDefault} />
+            <Text style={styles.endEarlyBtnText}>End early (emergency)</Text>
+          </TouchableOpacity>
+        )}
+
         {/* CUSTOMER: Completed – Leave Feedback + Done */}
         {isCompleted && !isWasher && (
           <View style={styles.completedActions}>
@@ -907,7 +932,7 @@ export default function BookingDetailScreen() {
             onPress={() => setPaymentReceived(true)}
           >
             <AppIcon name="banknote" size={22} color="#FFF" />
-            <Text style={styles.paymentReceivedBtnText}>Payment Received  ₹{booking.priceQuoted}</Text>
+            <Text style={styles.paymentReceivedBtnText}>Payment Received  ₹{booking.amountCharged ?? booking.priceQuoted}</Text>
           </TouchableOpacity>
         )}
 
@@ -1183,6 +1208,13 @@ const styles = StyleSheet.create({
   },
   primaryBtnDisabled: { backgroundColor: Colors.dark.border },
   primaryBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
+  endEarlyBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, marginTop: 10, padding: 12, borderRadius: 12,
+    borderWidth: 1, borderColor: Colors.dark.border,
+  },
+  endEarlyBtnText: { color: Colors.dark.tabIconDefault, fontWeight: '600', fontSize: 14 },
+  earlyStopNote: { color: '#F59E0B', fontSize: 12, marginTop: 8, lineHeight: 17 },
   washerActionRow: { flexDirection: 'row', gap: 10 },
   navBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
