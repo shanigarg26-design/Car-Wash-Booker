@@ -1,12 +1,12 @@
 name: Ops — API troubleshooting (no UI)
 
-# Troubleshoot Render + Expo from ANY device, no dashboards, using the repo's
-# encrypted secrets (RENDER_API_KEY, EXPO_TOKEN) — the secrets are never exposed.
+# Troubleshoot Render + Expo + Neon from ANY device, no dashboards, using the
+# repo's encrypted secrets. Pure API (curl) — no dependency installs.
 #
 #   Trigger:  gh workflow run ops.yml -f action=status
 #   Read it:  gh run list --workflow ops.yml -L1   then   gh run view <id> --log
 #
-# actions: status | render-service | render-deploys | render-logs | expo-builds | expo-updates
+# actions: status | render-service | render-deploys | render-logs | expo-builds | neon-status
 
 on:
   workflow_dispatch:
@@ -22,37 +22,36 @@ on:
           - render-deploys
           - render-logs
           - expo-builds
-          - expo-updates
+          - neon-status
       limit:
         description: "How many rows / log lines"
         required: false
-        default: "20"
+        default: "10"
 
 env:
   RENDER_SERVICE: srv-d9kr4fijnfac739oerk0
+  EAS_PROJECT_ID: d4b8d786-3cf7-4a02-acbf-d9405f07ce48
 
 jobs:
   ops:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (for Expo commands)
-        if: ${{ startsWith(inputs.action, 'expo') || inputs.action == 'status' }}
-        uses: actions/checkout@v4
-
       - name: Render — service info
         if: ${{ inputs.action == 'render-service' }}
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
+          set +e
           curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
             "https://api.render.com/v1/services/$RENDER_SERVICE" \
-            | jq '{name, type, suspended, autoDeploy, branch, dashboardUrl}'
+            | jq '{name, type, suspended, dashboardUrl}'
 
       - name: Render — recent deploys
         if: ${{ inputs.action == 'render-deploys' || inputs.action == 'status' }}
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
+          set +e
           echo "### Render — recent deploys"
           curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
             "https://api.render.com/v1/services/$RENDER_SERVICE/deploys?limit=${{ inputs.limit }}" \
@@ -63,33 +62,37 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
+          set +e
           OWNER=$(curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
             "https://api.render.com/v1/services/$RENDER_SERVICE" | jq -r '.ownerId')
           echo "### Render — logs (owner=$OWNER)"
           curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
             "https://api.render.com/v1/logs?ownerId=$OWNER&resource[]=$RENDER_SERVICE&limit=${{ inputs.limit }}" \
-            | jq -r '(.logs // [])[] | "\(.timestamp)  \(.message)"' \
-            || echo "(no logs returned — free-plan retention is limited)"
+            | jq -r '(.logs // [])[]? | "\(.timestamp)  \(.message)"'
+          echo "(if empty: free-plan log retention is limited)"
 
-      - name: Expo — recent builds
+      - name: Expo — recent builds (direct API)
         if: ${{ inputs.action == 'expo-builds' || inputs.action == 'status' }}
-        working-directory: artifacts/car-wash-mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          npm i -g eas-cli >/dev/null 2>&1
+          set +e
           echo "### Expo — recent Android builds"
-          eas build:list --platform android --limit ${{ inputs.limit }} --non-interactive --json 2>/dev/null \
-            | jq -r '.[] | "\(.createdAt)  [\(.status)]  \((.gitCommitHash // "")[0:7])"' \
-            || eas build:list --platform android --limit 5 --non-interactive
+          Q='query { app { byId(appId: "'"$EAS_PROJECT_ID"'") { builds(offset: 0, limit: '"${{ inputs.limit }}"') { id status platform appVersion gitCommitHash createdAt } } } }'
+          PAYLOAD=$(jq -n --arg q "$Q" '{query:$q}')
+          curl -s -X POST https://api.expo.dev/graphql \
+            -H "Authorization: Bearer $EXPO_TOKEN" -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            | jq -r 'if .errors then ("Expo API error: " + (.errors | map(.message) | join("; "))) else (.data.app.byId.builds[]? | "\(.createdAt)  [\(.status)]  \(.platform)  v\(.appVersion // "?")  \((.gitCommitHash // "")[0:7])") end'
 
-      - name: Expo — recent updates
-        if: ${{ inputs.action == 'expo-updates' }}
-        working-directory: artifacts/car-wash-mobile
+      - name: Neon — status (projects/branches)
+        if: ${{ inputs.action == 'neon-status' }}
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
         run: |
-          npm i -g eas-cli >/dev/null 2>&1
-          echo "### Expo — recent updates (channel preview)"
-          eas update:list --branch preview --limit ${{ inputs.limit }} --non-interactive 2>/dev/null \
-            || eas update:list --limit 10 --non-interactive
+          set +e
+          if [ -z "$NEON_API_KEY" ]; then echo "NEON_API_KEY secret not set — skipping."; exit 0; fi
+          echo "### Neon — projects"
+          curl -s -H "Authorization: Bearer $NEON_API_KEY" \
+            "https://console.neon.tech/api/v2/projects" \
+            | jq -r '(.projects // [])[] | "\(.name)  id=\(.id)  region=\(.region_id)  created=\(.created_at)"'
