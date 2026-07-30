@@ -9,10 +9,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
-import { DevSettings, Platform, StyleSheet, TouchableOpacity, View } from "react-native";
+import { DevSettings, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import AppIcon from "@/components/AppIcon";
+import { BUILD_TAG } from "@/constants/build";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
@@ -110,6 +111,20 @@ const globalHomeStyles = StyleSheet.create({
   },
 });
 
+// Global build stamp — shows on EVERY screen (incl. login) so you can confirm at a
+// glance that the newest bundle is running on Appetize / the phone.
+function GlobalBuildStamp() {
+  return (
+    <View style={buildStampStyles.wrap} pointerEvents="none">
+      <Text style={buildStampStyles.text}>build · {BUILD_TAG}</Text>
+    </View>
+  );
+}
+const buildStampStyles = StyleSheet.create({
+  wrap: { position: 'absolute', bottom: 4, left: 10, zIndex: 99999 },
+  text: { color: '#94A3B8', opacity: 0.7, fontSize: 10 },
+});
+
 // Registers Expo push token after login and handles notification taps
 function PushTokenManager() {
   const { user } = useAuth();
@@ -163,6 +178,7 @@ export default function RootLayout() {
               <RootLayoutNav />
               <GlobalHomeButton />
               <DevReloadButton />
+              <GlobalBuildStamp />
             </GestureHandlerRootView>
           </AuthProvider>
         </QueryClientProvider>
