@@ -23,6 +23,11 @@ A car-wash booking app: an Expo/React Native mobile app + an Express API backend
 
 So the normal loop is: **edit code → commit & push → user reopens the app to see it.**
 
+### Standing rule for every app-facing change (user request)
+
+1. **Bump the build stamp.** On every change that affects the mobile app, set `artifacts/car-wash-mobile/constants/build.ts` `BUILD_TAG` to a NEW unique string (e.g. `teal-falcon-4517`). This is how the user visually confirms the update landed on their phone.
+2. **Land it on `main`.** Only pushes to `main` publish an EAS Update to the phone — work left on a feature branch never reaches the user. Merge/push to `main` so the change is actually delivered.
+
 ## Login
 
 On the phone verification screen, OTP bypass code is **`1111`** (skips SMS).
