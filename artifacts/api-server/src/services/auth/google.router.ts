@@ -9,7 +9,7 @@
  *   6. /auth/google/verify-phone-otp  — verifies OTP, stores verified phone against pending token
  *   7. /auth/google/complete          — creates account with chosen role (uses verified phone)
  */
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { db, usersTable, cleanersTable, otpsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import { LoginUserResponse } from "@workspace/api-zod";
@@ -20,9 +20,23 @@ const router: IRouter = Router();
 
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
-const REPLIT_DOMAIN        = process.env.REPLIT_DOMAINS?.split(",")[0] ?? "";
-const REDIRECT_URI         = `https://${REPLIT_DOMAIN}/api/auth/google/callback`;
 const APP_SCHEME           = "car-wash-mobile";
+
+// Base URL of THIS server, used to build the Google OAuth `redirect_uri`. This
+// value must EXACTLY match an "Authorized redirect URI" on the Google OAuth
+// client. Prefer an explicit env var (PUBLIC_BASE_URL), then the legacy Replit
+// domain, and finally derive it from the incoming request so it works on
+// whatever host the server is deployed to (e.g. Render). The old code used only
+// REPLIT_DOMAINS, which is empty off-Replit and produced "https:///..." — a
+// broken redirect_uri that Google rejects.
+function getRedirectUri(req: Request): string {
+  const envBase =
+    process.env.PUBLIC_BASE_URL ||
+    (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "");
+  const base =
+    envBase || `${req.get("x-forwarded-proto") || "https"}://${req.get("host")}`;
+  return `${base.replace(/\/+$/, "")}/api/auth/google/callback`;
+}
 
 // ── In-memory token stores ───────────────────────────────────────────────────
 const googleAuthTokens     = new Map<string, { userId: number; ts: number }>();
@@ -81,7 +95,7 @@ router.get("/auth/google/init", (req, res): void => {
   pendingStates.set(state, { role, ts: Date.now(), platform, returnUrl });
 
   const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID, redirect_uri: REDIRECT_URI,
+    client_id: GOOGLE_CLIENT_ID, redirect_uri: getRedirectUri(req),
     response_type: "code", scope: "openid email profile",
     state, access_type: "offline", prompt: "select_account",
   });
@@ -108,7 +122,7 @@ router.get("/auth/google/callback", async (req, res): Promise<void> => {
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, redirect_uri: REDIRECT_URI, grant_type: "authorization_code" }),
+    body: new URLSearchParams({ code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, redirect_uri: getRedirectUri(req), grant_type: "authorization_code" }),
   });
 
   if (!tokenRes.ok) {
