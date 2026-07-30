@@ -9,7 +9,7 @@
  * so it can be moved to a separate process or message queue in the future.
  */
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
-import { eq, and, gte, lt } from "drizzle-orm";
+import { eq, and, gte, lt, inArray } from "drizzle-orm";
 import { sendPush } from "../../shared/push.js";
 
 export const MAX_DISPATCH           = 5;
@@ -90,7 +90,15 @@ export async function dispatchToNearestCleaners(
       gte(usersTable.lastSeenAt, new Date(Date.now() - ONLINE_STALE_MS)),
     ));
 
-  const eligible = allCleaners.filter(w => !excludeCleanerIds.includes(w.id));
+  // Exclude cleaners who already have a job in progress — no point dispatching to
+  // someone who can't accept (they'd just get spammed and the customer would wait).
+  const busy = await db
+    .select({ cleanerId: bookingsTable.cleanerId })
+    .from(bookingsTable)
+    .where(inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"]));
+  const busyIds = new Set(busy.map(b => b.cleanerId).filter((id): id is number => id != null));
+
+  const eligible = allCleaners.filter(w => !excludeCleanerIds.includes(w.id) && !busyIds.has(w.id));
   if (eligible.length === 0) return 0;
 
   const withDist = eligible.map(w => ({

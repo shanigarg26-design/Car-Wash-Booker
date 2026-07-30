@@ -122,6 +122,14 @@ router.post("/bookings", async (req, res): Promise<void> => {
 
   const lat            = customerLat ?? user.latitude ?? null;
   const lng            = customerLng ?? user.longitude ?? null;
+
+  // A booking with no coordinates can never be matched to a nearby cleaner (it would
+  // just search for 5 min and auto-cancel). Reject upfront with a clear message.
+  if (lat == null || lng == null) {
+    res.status(400).json({ error: "location_required", message: "We need your location to find a nearby cleaner. Please enable location access and try again." });
+    return;
+  }
+
   const price          = calcPrice(vehicleType, washType);
   const cleanTypeFinal = washType ?? "exterior";
 
@@ -400,8 +408,10 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
   const isAssignedCleaner = !!cleaner && existing.cleanerId === cleaner.id;
   const isCustomer        = existing.customerId === userId;
   if (!isAssignedCleaner && !isCustomer) { res.status(403).json({ error: "Not authorized to complete this booking" }); return; }
-  if (!["accepted", "arrived", "in_progress"].includes(existing.status)) {
-    res.status(409).json({ error: "Booking cannot be completed at this stage" }); return;
+  // Completion requires the service to have actually started (OTP verified) — this
+  // stops a job being marked done without the customer's OTP consent.
+  if (existing.status !== "in_progress") {
+    res.status(409).json({ error: "not_in_progress", message: "The service must be started (via the customer's OTP) before it can be completed." }); return;
   }
 
   const [booking] = await db.update(bookingsTable).set({ status: "completed" }).where(eq(bookingsTable.id, params.data.id)).returning();
