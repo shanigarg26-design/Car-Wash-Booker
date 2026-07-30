@@ -12,8 +12,20 @@ gh workflow run ops.yml --repo shanigarg26-design/Car-Wash-Booker -f action=stat
 gh run list --repo shanigarg26-design/Car-Wash-Booker --workflow ops.yml -L1
 gh run view <run-id> --repo shanigarg26-design/Car-Wash-Booker --log
 ```
-**actions:** `status` (Render deploys + Expo builds) · `render-service` · `render-deploys` · `render-logs` · `expo-builds` · `neon-status`
+**actions:** `status` (Render deploys + Expo builds) · `render-service` · `render-deploys` · `render-logs` · `expo-builds` · `neon-status` · `sql`
 (optional `-f limit=20`)
+
+## Run SQL against the live DB — no Neon UI, no credential in chat
+```bash
+gh workflow run ops.yml --repo shanigarg26-design/Car-Wash-Booker \
+  -f action=sql -f query="select id, name, email, role, is_logged_in from users order by id;"
+# then read the result rows:
+gh run list --repo shanigarg26-design/Car-Wash-Booker --workflow ops.yml -L1
+gh run view <run-id> --repo shanigarg26-design/Car-Wash-Booker --log
+```
+The `sql` step reads `DATABASE_URL` **live from Render's env vars** (via `RENDER_API_KEY`) and runs
+`psql` on the runner — the connection string never leaves the runner and is masked in logs. This is
+why no `NEON_DATABASE_URL` secret is needed and the DB password never has to pass through chat.
 
 ## Direct API (interactive, only when a key value is on hand this session)
 - **Render:** `curl -H "Authorization: Bearer $RENDER_API_KEY" https://api.render.com/v1/services/srv-d9kr4fijnfac739oerk0/deploys?limit=5`
@@ -31,4 +43,16 @@ gh run view <run-id> --repo shanigarg26-design/Car-Wash-Booker --log
 The safety system blocks handling raw secret *values* (DB passwords, extracting keys from pages).
 So: creating keys + storing them as secrets is fine; using them via workflows/curl is fine; but
 **reading a secret value back is intentionally impossible** — that's why keys live in GitHub Actions
-Secrets, not in the repo. Rotate all keys periodically (they passed through chat during setup).
+Secrets, not in the repo. The `sql` action above is designed around this: the DB URL is read on the
+runner and never handled in chat.
+
+## Key rotation status (2026-07-30)
+- **Google OAuth client secret** — ROTATED. New secret set in Render (`GOOGLE_CLIENT_SECRET`),
+  verified working, and the old exposed secret (`****sLiK`, leaked in public git history) was
+  **disabled and deleted** in the Google console. Only the new secret exists now.
+- **DB password** — NOT rotated (not needed): the connection string never passed through chat
+  (the safety classifier blocked it every time), so it was never exposed. SQL is now no-UI via the
+  `sql` action, which reads the URL from Render at runtime.
+- **API keys** (`RENDER_API_KEY`, `NEON_API_KEY`, Appetize token) — still PENDING rotation; these
+  were pasted into chat during setup. Rotate when convenient: create new → `gh secret set` /
+  update Appetize → delete old.
