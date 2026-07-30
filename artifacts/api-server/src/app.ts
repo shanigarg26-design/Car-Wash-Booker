@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type ErrorRequestHandler } from "express";
 import cors from "cors";
 import session from "express-session";
 import router from "./gateway/index.js";
@@ -23,5 +23,15 @@ app.use(session({
 // Avatars are now served from the database (see user router GET /api/avatars/:userId),
 // so they survive Render redeploys. No local static mount needed.
 app.use("/api", router);
+
+// Central error handler. Express 5 forwards rejected promises from async route
+// handlers here, so an unexpected error (e.g. a transient DB failure) returns a
+// clean 500 to the client instead of crashing the server or hanging the request.
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error("[UnhandledError]", err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "server_error", message: "Something went wrong. Please try again." });
+};
+app.use(errorHandler);
 
 export default app;

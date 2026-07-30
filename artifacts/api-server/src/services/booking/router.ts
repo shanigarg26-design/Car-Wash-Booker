@@ -23,6 +23,13 @@ import { sendPush } from "../../shared/push.js";
 
 const router: IRouter = Router();
 
+// Brute-force guard for the service-start OTP (a 4-digit code). Tracks wrong
+// attempts per booking; after MAX_OTP_ATTEMPTS the cleaner must have the customer
+// re-share the OTP (which resets the counter). In-memory is fine — a restart just
+// clears the (short-lived) lock, and there is no security downside to that.
+const otpAttempts = new Map<number, number>();
+const MAX_OTP_ATTEMPTS = 5;
+
 // ── GET /api/bookings ─────────────────────────────────────────────────────────
 router.get("/bookings", async (req, res): Promise<void> => {
   const userId = (req.session as unknown as Record<string, unknown>).userId as number | undefined;
@@ -217,6 +224,13 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
   const [cleaner] = await db.select().from(cleanersTable).where(eq(cleanersTable.userId, userId));
   if (!cleaner) { res.status(403).json({ error: "Not a cleaner" }); return; }
 
+  // A cleaner can only handle one job at a time — block accepting a second booking
+  // while one is already in progress (accepted / arrived / in_progress).
+  const [activeJob] = await db.select({ id: bookingsTable.id }).from(bookingsTable).where(
+    and(eq(bookingsTable.cleanerId, cleaner.id), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])),
+  );
+  if (activeJob) { res.status(409).json({ error: "active_job_exists", message: "Finish your current job before accepting a new one." }); return; }
+
   const [dispatch] = await db.select().from(bookingDispatchesTable).where(
     and(eq(bookingDispatchesTable.bookingId, params.data.id), eq(bookingDispatchesTable.cleanerId, cleaner.id), eq(bookingDispatchesTable.status, "pending"))
   );
@@ -322,6 +336,7 @@ router.patch("/bookings/:id/share-otp", async (req, res): Promise<void> => {
   if (!booking || booking.customerId !== userId || booking.status !== "arrived") { res.status(403).json({ error: "Cannot share OTP for this booking" }); return; }
 
   const [updated] = await db.update(bookingsTable).set({ otpShared: true }).where(eq(bookingsTable.id, bookingId)).returning();
+  otpAttempts.delete(bookingId); // fresh share → clear any prior lockout
   const enriched  = await enrichBooking(updated);
 
   if (enriched._cleanerPushToken && updated.serviceOtp) {
@@ -348,7 +363,15 @@ router.patch("/bookings/:id/start", async (req, res): Promise<void> => {
   const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
   if (!booking || booking.cleanerId !== cleaner.id || booking.status !== "arrived") { res.status(403).json({ error: "Cannot start this booking" }); return; }
   if (!booking.otpShared) { res.status(409).json({ error: "Customer has not shared the OTP yet" }); return; }
-  if (booking.serviceOtp !== otp.trim()) { res.status(400).json({ error: "incorrect_otp", message: "Incorrect OTP. Please try again." }); return; }
+
+  if ((otpAttempts.get(bookingId) ?? 0) >= MAX_OTP_ATTEMPTS) {
+    res.status(429).json({ error: "otp_locked", message: "Too many incorrect attempts. Ask the customer to re-share the OTP." }); return;
+  }
+  if (booking.serviceOtp !== otp.trim()) {
+    otpAttempts.set(bookingId, (otpAttempts.get(bookingId) ?? 0) + 1);
+    res.status(400).json({ error: "incorrect_otp", message: "Incorrect OTP. Please try again." }); return;
+  }
+  otpAttempts.delete(bookingId); // correct OTP → clear counter
 
   const [updated] = await db.update(bookingsTable).set({ status: "in_progress" }).where(eq(bookingsTable.id, bookingId)).returning();
   const enriched  = await enrichBooking(updated);

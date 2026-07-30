@@ -115,7 +115,7 @@ export async function enrichBooking(booking: typeof bookingsTable.$inferSelect) 
     otpShared:                 booking.otpShared  ?? false,
     createdAt:                 booking.createdAt.toISOString(),
     dispatchedCount:           dispatches.length,
-    washerCancelledPreviously: dispatches.some(d => d.status === "declined"),
+    washerCancelledPreviously: dispatches.some(d => d.status === "declined" || d.status === "cleaner_cancelled"),
     // Internal – used for push notifications; stripped by Zod schema before client delivery
     _customerPushToken: customer?.expoPushToken ?? null,
     _cleanerPushToken:  cleanerPushToken,
