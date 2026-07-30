@@ -5,7 +5,7 @@
  * (parsing IDs, calling service functions, returning responses).
  */
 import { Router, type IRouter } from "express";
-import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
+import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable, subscriptionsTable } from "@workspace/db";
 import { eq, and, ne, inArray } from "drizzle-orm";
 import {
   CreateBookingBody,
@@ -18,6 +18,7 @@ import {
   GetBookingResponse,
 } from "@workspace/api-zod";
 import { enrichBooking, calcPrice, generateServiceOtp, calcProratedAmount } from "./service.js";
+import { findCoveringSubscription } from "../subscription/router.js";
 import { dispatchToNearestCleaners, scheduleSearchRetry, cancelRetry, MAX_DISPATCH, MAX_DISPATCH_RADIUS_KM, haversineKm } from "./dispatcher.js";
 import { sendPush } from "../../shared/push.js";
 
@@ -138,11 +139,16 @@ router.post("/bookings", async (req, res): Promise<void> => {
   const price          = calcPrice(vehicleType, washType);
   const cleanTypeFinal = washType ?? "exterior";
 
+  // If the customer has an active prepaid package covering this vehicle+clean,
+  // this wash is covered (they'll owe ₹0). Reserve one wash from it.
+  const coveringSub = await findCoveringSubscription(userId, vehicleType ?? null, cleanTypeFinal);
+
   const [booking] = await db.insert(bookingsTable).values({
     customerId: userId, cleanerId: null, customerAddress,
     customerLat: lat, customerLng: lng, scheduledAt: new Date(),
     notes: notes ?? null, vehicleType: vehicleType ?? null,
     cleanType: cleanTypeFinal, priceQuoted: price, status: "searching",
+    subscriptionId: coveringSub?.id ?? null,
   }).returning();
 
   await dispatchToNearestCleaners(booking.id, lat, lng, [], MAX_DISPATCH, {
@@ -419,9 +425,16 @@ router.patch("/bookings/:id/complete", async (req, res): Promise<void> => {
     res.status(409).json({ error: "not_in_progress", message: "The service must be started (via the customer's OTP) before it can be completed." }); return;
   }
 
-  // A normal, full completion — the customer owes the full quoted price.
-  const [booking] = await db.update(bookingsTable).set({ status: "completed", amountCharged: existing.priceQuoted }).where(eq(bookingsTable.id, params.data.id)).returning();
+  // Covered by a prepaid package → customer owes ₹0 and one wash is consumed.
+  // Otherwise a normal, full completion at the quoted price.
+  const chargeAmt = existing.subscriptionId ? 0 : existing.priceQuoted;
+  const [booking] = await db.update(bookingsTable).set({ status: "completed", amountCharged: chargeAmt }).where(eq(bookingsTable.id, params.data.id)).returning();
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  if (existing.subscriptionId) {
+    const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, existing.subscriptionId));
+    if (sub) await db.update(subscriptionsTable).set({ washesUsed: sub.washesUsed + 1 }).where(eq(subscriptionsTable.id, sub.id));
+  }
 
   if (booking.cleanerId) {
     const [c] = await db.select().from(cleanersTable).where(eq(cleanersTable.id, booking.cleanerId));
@@ -451,16 +464,25 @@ router.patch("/bookings/:id/stop", async (req, res): Promise<void> => {
   if (existing.status !== "in_progress") { res.status(409).json({ error: "not_in_progress", message: "You can only stop a wash that is in progress." }); return; }
 
   const { amount, fraction, minutesSpent } = calcProratedAmount(existing.priceQuoted, existing.cleanType, existing.serviceStartedAt);
+  // A package-covered wash is already prepaid → the customer owes ₹0 even if stopped early.
+  const chargeAmt = existing.subscriptionId ? 0 : amount;
 
   const [booking] = await db.update(bookingsTable)
-    .set({ status: "completed", stoppedEarly: true, amountCharged: amount })
+    .set({ status: "completed", stoppedEarly: true, amountCharged: chargeAmt })
     .where(eq(bookingsTable.id, bookingId)).returning();
+
+  if (existing.subscriptionId) {
+    const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, existing.subscriptionId));
+    if (sub) await db.update(subscriptionsTable).set({ washesUsed: sub.washesUsed + 1 }).where(eq(subscriptionsTable.id, sub.id));
+  }
 
   const enriched = await enrichBooking(booking);
   if (enriched._customerPushToken) {
-    await sendPush([enriched._customerPushToken], "⚠️ Wash ended early",
-      `Your cleaner had to stop after ~${minutesSpent} min. You only pay for time spent: ₹${amount} (of ₹${existing.priceQuoted}).`,
-      { type: "service_stopped", bookingId, amountCharged: amount });
+    const msg = existing.subscriptionId
+      ? `Your cleaner had to stop after ~${minutesSpent} min. This wash was covered by your package.`
+      : `Your cleaner had to stop after ~${minutesSpent} min. You only pay for time spent: ₹${amount} (of ₹${existing.priceQuoted}).`;
+    await sendPush([enriched._customerPushToken], "⚠️ Wash ended early", msg,
+      { type: "service_stopped", bookingId, amountCharged: chargeAmt });
   }
 
   console.log(`[Stop] Booking ${bookingId} stopped early at ${Math.round(fraction * 100)}% → ₹${amount}`);

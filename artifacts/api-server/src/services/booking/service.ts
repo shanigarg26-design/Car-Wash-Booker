@@ -35,6 +35,31 @@ export function generateServiceOtp(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
+// ── Prepaid packages (subscriptions) ─────────────────────────────────────────
+// Longer packages carry a bigger discount to reward commitment. `washes` assumes
+// a roughly weekly cadence over the duration.
+export interface PackagePlan { key: string; label: string; durationDays: number; washes: number; discountPercent: number; }
+export const PACKAGES: PackagePlan[] = [
+  { key: "week",      label: "1 Week",   durationDays: 7,   washes: 1,  discountPercent: 5  },
+  { key: "fortnight", label: "15 Days",  durationDays: 15,  washes: 2,  discountPercent: 8  },
+  { key: "month",     label: "1 Month",  durationDays: 30,  washes: 4,  discountPercent: 12 },
+  { key: "halfyear",  label: "6 Months", durationDays: 180, washes: 26, discountPercent: 20 },
+  { key: "year",      label: "1 Year",   durationDays: 365, washes: 52, discountPercent: 30 },
+];
+
+/** Computes package pricing (with the tiered discount) for a vehicle + clean type. */
+export function priceForPackage(pkg: PackagePlan, vehicleType: string | null | undefined, cleanType: string | null | undefined) {
+  const perWashBase = calcPrice(vehicleType, cleanType);
+  const fullPrice    = perWashBase * pkg.washes;
+  const packagePrice = Math.round(fullPrice * (1 - pkg.discountPercent / 100));
+  return {
+    key: pkg.key, label: pkg.label, durationDays: pkg.durationDays, washes: pkg.washes,
+    discountPercent: pkg.discountPercent, perWashBase, fullPrice, packagePrice,
+    savings: fullPrice - packagePrice,
+    perWashEffective: Math.round(packagePrice / pkg.washes),
+  };
+}
+
 // Expected hands-on wash time (minutes) by clean type — the basis for prorating
 // the charge when a washer has to stop mid-service.
 const EXPECTED_DURATION_MIN: Record<string, number> = { exterior: 20, both: 40 };
@@ -136,6 +161,8 @@ export async function enrichBooking(booking: typeof bookingsTable.$inferSelect) 
     priceQuoted:               booking.priceQuoted,
     amountCharged:             booking.amountCharged ?? null,
     stoppedEarly:              booking.stoppedEarly ?? false,
+    subscriptionId:            booking.subscriptionId ?? null,
+    coveredBySubscription:     booking.subscriptionId != null,
     serviceStartedAt:          booking.serviceStartedAt ? booking.serviceStartedAt.toISOString() : null,
     serviceOtp:                booking.serviceOtp ?? null,
     otpShared:                 booking.otpShared  ?? false,

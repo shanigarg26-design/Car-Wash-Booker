@@ -20,6 +20,7 @@ import adminRouter       from "../services/admin/router.js";
 import locationRouter    from "../services/location/router.js";
 import ownerRouter       from "../services/owner/router.js";
 import internalRouter    from "../services/internal/router.js";
+import subscriptionRouter from "../services/subscription/router.js";
 
 const gateway: IRouter = Router();
 
@@ -41,5 +42,6 @@ gateway.use(adminRouter);
 gateway.use(locationRouter);
 gateway.use(ownerRouter);
 gateway.use(internalRouter);
+gateway.use(subscriptionRouter);
 
 export default gateway;

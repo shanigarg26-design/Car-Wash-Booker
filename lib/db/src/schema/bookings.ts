@@ -22,6 +22,8 @@ export const bookingsTable = pgTable("bookings", {
   serviceStartedAt: timestamp("service_started_at", { withTimezone: true }),
   // True when the washer ended the job early (e.g. an emergency).
   stoppedEarly: boolean("stopped_early").notNull().default(false),
+  // Set when this booking is covered by a prepaid package (customer owes ₹0).
+  subscriptionId: integer("subscription_id"),
   serviceOtp: text("service_otp"),
   otpShared: boolean("otp_shared").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
