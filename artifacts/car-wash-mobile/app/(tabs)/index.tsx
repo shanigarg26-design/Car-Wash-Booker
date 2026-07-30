@@ -162,6 +162,15 @@ function CustomerDashboard({ user }: { user: any }) {
         </TouchableOpacity>
       )}
 
+      <TouchableOpacity style={styles.packagePromo} onPress={() => router.push('/packages')} activeOpacity={0.9}>
+        <AppIcon name="tag" size={22} color={Colors.dark.success} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.packagePromoTitle}>Save with a wash package</Text>
+          <Text style={styles.packagePromoSub}>Prepay weekly to yearly — up to 30% off. The longer the plan, the more you save.</Text>
+        </View>
+        <AppIcon name="chevron-right" size={18} color={Colors.dark.tabIconDefault} />
+      </TouchableOpacity>
+
       {recentBookings.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Recent Bookings</Text>
@@ -774,6 +783,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10,
   },
   locationWarnText: { color: '#F87171', fontSize: 12, flex: 1 },
+  packagePromo: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20,
+    backgroundColor: Colors.dark.success + '12', borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: Colors.dark.success + '44',
+  },
+  packagePromoTitle: { color: Colors.dark.text, fontWeight: '700', fontSize: 15 },
+  packagePromoSub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 3, lineHeight: 17 },
   locationCard: {
     flexDirection: 'row',
     alignItems: 'center',

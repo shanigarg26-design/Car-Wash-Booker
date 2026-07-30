@@ -462,6 +462,13 @@ export default function BookingDetailScreen() {
           </Text>
 
           {!isWasher && (
+            <TouchableOpacity style={styles.searchingEditBtn} onPress={() => router.push(`/edit-booking/${id}`)} activeOpacity={0.75}>
+              <AppIcon name="edit-2" size={14} color={Colors.dark.tint} />
+              <Text style={styles.searchingEditText}>Edit vehicle / wash type</Text>
+            </TouchableOpacity>
+          )}
+
+          {!isWasher && (
             <TouchableOpacity
               style={styles.searchingCancelBtn}
               onPress={handleSearchingCancel}
@@ -804,6 +811,14 @@ export default function BookingDetailScreen() {
             <AppIcon name="tag" size={16} color={Colors.dark.tint} />
             <Text style={styles.detailText}>₹{booking.priceQuoted}</Text>
           </View>
+
+          {['accepted', 'arrived', 'in_progress'].includes(booking.status) && (isWasher ? booking.customerName : booking.washerName) && (
+            <TouchableOpacity style={styles.chatBtn} onPress={() => router.push(`/chat/${id}`)} activeOpacity={0.8}>
+              <AppIcon name="message-circle" size={18} color={Colors.dark.tint} />
+              <Text style={styles.chatBtnText}>Message {isWasher ? booking.customerName : booking.washerName}</Text>
+              <AppIcon name="chevron-right" size={16} color={Colors.dark.tabIconDefault} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -1073,6 +1088,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
+  searchingEditBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, marginBottom: 8,
+  },
+  searchingEditText: { color: Colors.dark.tint, fontSize: 14, fontWeight: '600' },
 
   trackingCleanerRow: {
     flexDirection: 'row',
@@ -1189,6 +1209,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chatBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: Colors.dark.border,
+  },
+  chatBtnText: { flex: 1, color: Colors.dark.tint, fontWeight: '600', fontSize: 14 },
   detailText: { color: Colors.dark.text, fontSize: 14, flexShrink: 1 },
   personAvatar: { width: 36, height: 36, borderRadius: 18 },
   personAvatarFallback: { backgroundColor: Colors.dark.tint, justifyContent: 'center' as const, alignItems: 'center' as const },

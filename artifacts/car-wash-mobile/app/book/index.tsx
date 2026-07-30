@@ -50,6 +50,7 @@ export default function BookScreen() {
   const [notes, setNotes] = useState('');
   const [vehicleType, setVehicleType] = useState<string | null>(null);
   const [washType, setWashType] = useState<WashType>('exterior');
+  const [scheduleAt, setScheduleAt] = useState<string | null>(null); // null = book now
 
   /* ── Reverse-geocode lat/lng → human address via our API server (OSM) ── */
   const reverseGeocodeCoords = async (lat: number, lng: number): Promise<string> => {
@@ -157,6 +158,18 @@ export default function BookScreen() {
     ? (washType === 'both' ? PRICING[vehicleType].both : PRICING[vehicleType].exterior)
     : null;
 
+  // Preset "when" options (JS-only, no native date-picker dependency).
+  const schedulePresets = (() => {
+    const now = new Date();
+    const at = (addDays: number, h: number) => { const d = new Date(now); d.setDate(d.getDate() + addDays); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+    return [
+      { label: 'Now', value: null as string | null },
+      { label: 'In 2 hrs', value: new Date(now.getTime() + 2 * 3600e3).toISOString() },
+      { label: 'Tomorrow 9 AM', value: at(1, 9) },
+      { label: 'Tomorrow 6 PM', value: at(1, 18) },
+    ];
+  })();
+
   const bookMutation = useMutation({
     mutationFn: (data: any) => apiFetch('/api/bookings', {
       method: 'POST',
@@ -184,6 +197,7 @@ export default function BookScreen() {
       notes: notes || undefined,
       vehicleType,
       washType,
+      scheduledAt: scheduleAt || undefined,
     });
   };
 
@@ -457,6 +471,26 @@ export default function BookScreen() {
           </View>
         </View>
 
+        {/* ── When ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            <AppIcon name="clock" size={14} color={Colors.dark.tint} /> When
+          </Text>
+          <View style={styles.scheduleRow}>
+            {schedulePresets.map(p => (
+              <TouchableOpacity
+                key={p.label}
+                style={[styles.scheduleChip, scheduleAt === p.value && styles.scheduleChipActive]}
+                onPress={() => setScheduleAt(p.value)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.scheduleChipText, scheduleAt === p.value && styles.scheduleChipTextActive]}>{p.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {scheduleAt && <Text style={styles.scheduleHint}>We'll start finding you a cleaner at the scheduled time.</Text>}
+        </View>
+
         {/* ── Notes ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
@@ -508,8 +542,8 @@ export default function BookScreen() {
             <ActivityIndicator color="#FFF" />
           ) : (
             <>
-              <AppIcon name="search" size={20} color="#FFF" />
-              <Text style={styles.bookBtnText}>Find Nearest Cleaner</Text>
+              <AppIcon name={scheduleAt ? 'clock' : 'search'} size={20} color="#FFF" />
+              <Text style={styles.bookBtnText}>{scheduleAt ? 'Schedule Wash' : 'Find Nearest Cleaner'}</Text>
             </>
           )}
         </TouchableOpacity>
@@ -800,6 +834,12 @@ const styles = StyleSheet.create({
 
   // Wash type
   washTypeRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  scheduleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  scheduleChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, backgroundColor: Colors.dark.card, borderWidth: 1, borderColor: Colors.dark.border },
+  scheduleChipActive: { backgroundColor: Colors.dark.tint, borderColor: Colors.dark.tint },
+  scheduleChipText: { color: Colors.dark.tabIconDefault, fontSize: 13 },
+  scheduleChipTextActive: { color: '#FFF', fontWeight: '600' },
+  scheduleHint: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 8 },
   washTypeBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: Colors.dark.card, borderRadius: 14, padding: 16,
