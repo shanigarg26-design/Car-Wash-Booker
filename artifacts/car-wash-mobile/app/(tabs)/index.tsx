@@ -363,15 +363,24 @@ function CleanerDashboard() {
       refreshControl={<RefreshControl refreshing={bookingsLoading} onRefresh={refetch} tintColor={Colors.dark.tint} />}
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.availabilityCard}>
+      {/* One clear availability control — merges the old toggle + location boxes. */}
+      <View style={[styles.availabilityCard, profile?.available && styles.availabilityCardOnline]}>
         <View style={{ flex: 1 }}>
           <View style={styles.availabilityRow}>
             <View style={[styles.statusDot, { backgroundColor: profile?.available ? Colors.dark.success : Colors.dark.tabIconDefault }]} />
-            <Text style={styles.cardTitle}>{profile?.available ? 'Online' : 'Offline'}</Text>
+            <Text style={styles.cardTitle}>{profile?.available ? "You're Online" : "You're Offline"}</Text>
           </View>
           <Text style={styles.cardSubtitle}>
-            {profile?.available ? 'You are receiving requests' : 'Turn on to receive requests'}
+            {profile?.available
+              ? 'Receiving bookings within 5 km. Turn the toggle off when you want to stop.'
+              : 'Turn the toggle on to start receiving bookings.'}
           </Text>
+          {locationStatus === 'denied' && (
+            <TouchableOpacity style={styles.locationWarnInline} onPress={requestPermission} activeOpacity={0.8}>
+              <AppIcon name="map-pin-off" size={14} color="#F87171" />
+              <Text style={styles.locationWarnText}>Location is off — tap to enable (required to receive bookings)</Text>
+            </TouchableOpacity>
+          )}
         </View>
         <Switch
           value={profile?.available ?? false}
@@ -380,46 +389,6 @@ function CleanerDashboard() {
           thumbColor="#FFF"
         />
       </View>
-
-      {/* Location status card */}
-      {locationStatus === 'checking' && (
-        <View style={styles.locationCard}>
-          <ActivityIndicator size="small" color={Colors.dark.tint} style={{ marginRight: 10 }} />
-          <Text style={styles.locationText}>Detecting your location…</Text>
-        </View>
-      )}
-
-      {locationStatus === 'denied' && (
-        <TouchableOpacity style={[styles.locationCard, styles.locationCardDenied]} onPress={requestPermission} activeOpacity={0.8}>
-          <AppIcon name="map-pin-off" size={18} color="#F87171" style={{ marginRight: 10 }} />
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.locationText, { color: '#F87171', fontWeight: '600' }]}>Location access required</Text>
-            <Text style={[styles.locationHint, { color: '#FCA5A5' }]}>Tap to grant permission — needed to receive bookings</Text>
-          </View>
-          <AppIcon name="chevron-right" size={16} color="#F87171" />
-        </TouchableOpacity>
-      )}
-
-      {locationStatus === 'granted' && profile?.available && (
-        <View style={[styles.locationCard, styles.locationCardGranted]}>
-          <View style={styles.locationDot} />
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.locationText, { color: '#4ADE80', fontWeight: '600' }]}>Live location ON</Text>
-            <Text style={[styles.locationHint, { color: '#86EFAC' }]}>You'll receive bookings from customers within 5 km</Text>
-          </View>
-          <AppIcon name="navigation" size={16} color="#4ADE80" />
-        </View>
-      )}
-
-      {locationStatus === 'granted' && !profile?.available && (
-        <View style={styles.locationCard}>
-          <AppIcon name="map-pin" size={18} color={Colors.dark.tint} style={{ marginRight: 10 }} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.locationText}>Location ready</Text>
-            <Text style={styles.locationHint}>Go online above to start receiving bookings</Text>
-          </View>
-        </View>
-      )}
 
       {/* Incoming booking requests are handled by the full-screen IncomingBookingAlert overlay below */}
       {incomingRequests.length > 0 && (
@@ -797,6 +766,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.dark.border,
   },
+  availabilityCardOnline: {
+    borderColor: Colors.dark.success,
+    backgroundColor: Colors.dark.success + '12',
+  },
+  locationWarnInline: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10,
+  },
+  locationWarnText: { color: '#F87171', fontSize: 12, flex: 1 },
   locationCard: {
     flexDirection: 'row',
     alignItems: 'center',
