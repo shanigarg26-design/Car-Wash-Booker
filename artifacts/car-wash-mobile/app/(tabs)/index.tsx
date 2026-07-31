@@ -17,6 +17,13 @@ import CurrentLocationMap from '@/components/CurrentLocationMap';
 import AvailabilityManager from '@/components/AvailabilityManager';
 import WasherPackages from '@/components/WasherPackages';
 
+function minutesLabel(m: number): string {
+  const h24 = Math.floor(m / 60), mm = m % 60;
+  const ap = h24 < 12 ? 'AM' : 'PM', h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${mm.toString().padStart(2, '0')} ${ap}`;
+}
+const fmtShort = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
 // Current half-hour slot index in IST (India). 0 = 06:00 … 23 = 17:30; -1 outside 6am–6pm.
 function currentIstSlot(): number {
   const d = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
@@ -113,10 +120,15 @@ function CustomerDashboard({ user }: { user: any }) {
     refetchInterval: 5000,
   });
 
+  const { data: subs } = useQuery({ queryKey: ['mySubs'], queryFn: () => apiFetch('/api/subscriptions/mine'), refetchInterval: 8000 });
+  const dailyPackages = (subs ?? []).filter((s: any) => s.kind === 'daily');
+
   const activeBookings = bookings?.filter((b: any) => (ACTIVE_STATUSES as readonly string[]).includes(b.status)) || [];
   const hasActive = activeBookings.length > 0;
+  // Future one-off scheduled washes (package days are shown as a package entry instead).
+  const upcomingBookings = bookings?.filter((b: any) => b.status === 'scheduled' && !b.subscriptionId) || [];
   const recentBookings = bookings
-    ?.filter((b: any) => !(ACTIVE_STATUSES as readonly string[]).includes(b.status))
+    ?.filter((b: any) => !(ACTIVE_STATUSES as readonly string[]).includes(b.status) && b.status !== 'scheduled')
     ?.slice(0, 5) || [];
   const totalWashes = bookings?.filter((b: any) => b.status === 'completed').length || 0;
 
@@ -182,11 +194,45 @@ function CustomerDashboard({ user }: { user: any }) {
       <TouchableOpacity style={styles.packagePromo} onPress={() => router.push('/packages')} activeOpacity={0.9}>
         <AppIcon name="tag" size={22} color={Colors.dark.success} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.packagePromoTitle}>Save with a wash package</Text>
-          <Text style={styles.packagePromoSub}>Prepay weekly to yearly — up to 30% off. The longer the plan, the more you save.</Text>
+          <Text style={styles.packagePromoTitle}>Start a daily wash package</Text>
+          <Text style={styles.packagePromoSub}>One wash a day, same washer, at a time you pick. Pay weekly — nothing upfront.</Text>
         </View>
         <AppIcon name="chevron-right" size={18} color={Colors.dark.tabIconDefault} />
       </TouchableOpacity>
+
+      {(dailyPackages.length > 0 || upcomingBookings.length > 0) && (
+        <>
+          <Text style={styles.sectionTitle}>Upcoming</Text>
+          {dailyPackages.map((s: any) => {
+            const next = (s.days ?? []).find((d: any) => ['scheduled', 'accepted', 'arrived', 'in_progress'].includes(d.status));
+            return (
+              <TouchableOpacity key={`pkg-${s.id}`} style={styles.pkgEntry} onPress={() => router.push(`/package/${s.id}`)} activeOpacity={0.85}>
+                <View style={styles.pkgEntryIcon}><AppIcon name="calendar" size={20} color={Colors.dark.tint} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.pkgEntryTitle}>Daily package · {minutesLabel(s.dailyMinutes)} · {s.daysCompleted ?? 0}/{s.washesTotal}</Text>
+                  <Text style={styles.pkgEntrySub} numberOfLines={1}>
+                    {s.status === 'unassigned' ? 'Washer didn’t accept — tap to fix' : s.cleanerName || 'Finding your washer…'}
+                    {next ? ` · next ${fmtShort(next.scheduledAt)}` : ''}
+                  </Text>
+                </View>
+                {s.amountDue > 0
+                  ? <View style={styles.dueBadge}><Text style={styles.dueBadgeText}>₹{s.amountDue} due</Text></View>
+                  : <AppIcon name="chevron-right" size={18} color={Colors.dark.tabIconDefault} />}
+              </TouchableOpacity>
+            );
+          })}
+          {upcomingBookings.map((b: any) => (
+            <TouchableOpacity key={`bk-${b.id}`} style={styles.pkgEntry} onPress={() => router.push(`/booking/${b.id}`)} activeOpacity={0.85}>
+              <View style={styles.pkgEntryIcon}><AppIcon name="clock" size={20} color={Colors.dark.tint} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pkgEntryTitle} numberOfLines={1}>{fmtShort(b.scheduledAt)}</Text>
+                <Text style={styles.pkgEntrySub} numberOfLines={1}>{b.customerAddress}</Text>
+              </View>
+              <AppIcon name="chevron-right" size={18} color={Colors.dark.tabIconDefault} />
+            </TouchableOpacity>
+          ))}
+        </>
+      )}
 
       {recentBookings.length > 0 && (
         <>
@@ -835,6 +881,12 @@ const styles = StyleSheet.create({
     color: Colors.dark.text,
     marginBottom: 12,
   },
+  pkgEntry: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.dark.card, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.dark.border },
+  pkgEntryIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.dark.tint + '22', alignItems: 'center', justifyContent: 'center' },
+  pkgEntryTitle: { color: Colors.dark.text, fontSize: 14, fontWeight: '700' },
+  pkgEntrySub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 3 },
+  dueBadge: { backgroundColor: '#FBBF2422', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  dueBadgeText: { color: '#FBBF24', fontSize: 12, fontWeight: '700' },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
