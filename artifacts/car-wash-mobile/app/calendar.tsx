@@ -42,7 +42,7 @@ export default function CalendarScreen() {
   const { data: profile } = useQuery({ queryKey: ['cleanerProfile'], queryFn: () => apiFetch('/api/cleaners/me') });
 
   const prefSlots: number[] = Array.isArray(profile?.availableSlots) ? profile.availableSlots : [];
-  const worksSlot = (s: number) => prefSlots.includes(s); // slots are mandatory; none set = all off
+  const worksSlot = (s: number) => prefSlots.length === 0 || prefSlots.includes(s); // none set = available all day
 
   // Index bookings by day → slot.
   const byDaySlot = useMemo(() => {

@@ -35,14 +35,16 @@ export function currentIstSlot(at: Date = new Date()): number {
 }
 
 function worksThisSlot(availableSlots: string | null, slot: number): boolean {
-  // Preference slots are mandatory: a washer with no slots set is available for nothing
-  // (he must pick his working hours before he can receive any booking).
-  if (slot < 0 || !availableSlots) return false;
+  // A washer with slots set only matches those slots. A washer who hasn't set any is
+  // treated as available all day, so he never stops getting scheduled bookings — the
+  // toggle only gates ad-hoc/instant work, never scheduled.
+  if (slot < 0) return false;
+  if (!availableSlots) return true;
   try {
     const arr = JSON.parse(availableSlots);
-    if (!Array.isArray(arr) || arr.length === 0) return false;
+    if (!Array.isArray(arr) || arr.length === 0) return true;
     return arr.includes(slot);
-  } catch { return false; }
+  } catch { return true; }
 }
 
 /** Send a booking to exactly ONE cleaner (used when the owner requests a specific washer). */

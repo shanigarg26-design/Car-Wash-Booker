@@ -591,7 +591,7 @@ function CleanerDashboard() {
           <AppIcon name="alert-triangle" size={18} color="#FBBF24" />
           <View style={{ flex: 1 }}>
             <Text style={styles.slotsWarnTitle}>Set your working hours</Text>
-            <Text style={styles.slotsWarnSub}>You won’t receive any bookings — instant or scheduled — until you pick the slots you work.</Text>
+            <Text style={styles.slotsWarnSub}>Pick the slots you work so scheduled bookings only reach you then. Until you set them, you may get requests at any time of day.</Text>
           </View>
           <AppIcon name="chevron-right" size={16} color="#FBBF24" />
         </TouchableOpacity>
