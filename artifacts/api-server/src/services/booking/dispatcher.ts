@@ -343,6 +343,11 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
       // Washer already bound → assign this day straight to him (no re-dispatch;
       // same washer every day). He goes → arrives → OTP → starts, like any job.
       if (pkg.cleanerId != null) {
+        // Don't hand him a second live job — if he's still mid-wash, leave this day
+        // 'scheduled' and retry on the next sweep once he's free (prevents double-booking).
+        const [busyBound] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+          .where(and(eq(bookingsTable.cleanerId, pkg.cleanerId), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])));
+        if (busyBound) continue;
         const otp = generateServiceOtp();
         const [assigned] = await db.update(bookingsTable)
           .set({ status: "accepted", cleanerId: pkg.cleanerId, serviceOtp: otp, priceQuoted: pkg.pricePerWash ?? b.priceQuoted })
@@ -380,7 +385,9 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
         const [busyPref] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
           .where(and(eq(bookingsTable.cleanerId, pkg.preferredCleanerId), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])));
         if (slotOk && !busyPref) {
-          const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
+          // Reset scheduledAt to now so the 5-min search window is measured from when it
+          // actually starts searching (a late cron would otherwise cancel it immediately).
+          const [promoted] = await db.update(bookingsTable).set({ status: "searching", scheduledAt: new Date() })
             .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
           if (promoted) {
             await dispatchToSpecificCleaner(b.id, pkg.preferredCleanerId,
@@ -398,7 +405,9 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
       // to accept binds the whole package (handled in the accept endpoint).
     }
 
-    const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
+    // Reset scheduledAt to now so the search window starts at promotion (a late cron
+    // otherwise cancels the booking in the same run — see the stale-search sweep below).
+    const [promoted] = await db.update(bookingsTable).set({ status: "searching", scheduledAt: new Date() })
       .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
     if (!promoted) continue;
     // Scheduled bookings reach in-range washers whose slot is marked available even if
@@ -420,12 +429,36 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
   );
   for (const b of staleSearching) {
     cancelRetry(b.id);
-    // A requested-washer package day that wasn't accepted in the 5-min window → fall
-    // back to a generic search (any available washer) instead of losing the day.
     if (b.subscriptionId) {
       const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, b.subscriptionId));
-      if (pkg && pkg.status === "active" && pkg.cleanerId == null && pkg.preferredCleanerId != null) {
-        await fallbackPreferredToGeneric(pkg, b.id);
+      if (pkg && pkg.status === "active") {
+        // A requested-washer day that wasn't accepted in its 5-min window → fall back to
+        // a generic search (any available washer) instead of losing the day.
+        if (pkg.cleanerId == null && pkg.preferredCleanerId != null) {
+          await fallbackPreferredToGeneric(pkg, b.id);
+          continue;
+        }
+        // A generic package day that found NO washer → drop this day but add a make-up
+        // day at the end so the owner still gets the full number of washes.
+        await db.update(bookingDispatchesTable).set({ status: "cancelled" })
+          .where(and(eq(bookingDispatchesTable.bookingId, b.id), eq(bookingDispatchesTable.status, "pending")));
+        await db.update(bookingsTable).set({ status: "cancelled", cleanerId: null, notes: "no_washer" })
+          .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "searching")));
+        const nextDay = new Date(pkg.expiresAt.getTime() + 86_400_000);
+        await db.insert(bookingsTable).values({
+          customerId: pkg.customerId, cleanerId: pkg.cleanerId ?? null,
+          customerAddress: pkg.address ?? b.customerAddress,
+          customerLat: pkg.latitude != null ? Number(pkg.latitude) : b.customerLat,
+          customerLng: pkg.longitude != null ? Number(pkg.longitude) : b.customerLng,
+          scheduledAt: nextDay, status: "scheduled",
+          vehicleType: pkg.vehicleType || null, cleanType: pkg.cleanType,
+          priceQuoted: pkg.pricePerWash ?? 0, subscriptionId: pkg.id,
+        });
+        await db.update(subscriptionsTable).set({ expiresAt: nextDay, washesTotal: pkg.washesTotal + 1 })
+          .where(eq(subscriptionsTable.id, pkg.id));
+        const [cust] = await db.select({ token: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, pkg.customerId));
+        if (cust?.token) await sendPush([cust.token], "No washer today", "No washer was available for today's package wash — we added a make-up day at the end.", { type: "package_no_washer", subscriptionId: pkg.id });
+        cancelledSearching++;
         continue;
       }
     }

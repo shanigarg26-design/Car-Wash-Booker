@@ -398,7 +398,7 @@ router.patch("/subscriptions/:id/cancel", async (req, res): Promise<void> => {
         subscriptionId: id, weekIndex: nextWeek, weekStart: now, weekEnd: now,
         washesCount: unbilled, amountDue: unbilled * rate, status: "due",
         dueDate: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000),
-      });
+      }).onConflictDoNothing();
     }
   }
 

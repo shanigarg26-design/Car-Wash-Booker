@@ -54,7 +54,8 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
       const [bill] = await db.insert(packageBillsTable).values({
         subscriptionId: pkg.id, weekIndex: k, weekStart, weekEnd, washesCount, amountDue,
         status: "due", dueDate,
-      }).returning();
+      }).onConflictDoNothing().returning();
+      if (!bill) continue; // another sweep already billed this week
       byWeek.set(k, bill);
       billsCreated++;
       const wk = k + 1;
@@ -68,6 +69,21 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
       if (bill.status !== "due") continue;
       const due = bill.dueDate.getTime();
       if (now > due) {
+        // Settle any completed-but-unbilled washes before cancelling, so the washer is
+        // still owed for work already delivered.
+        const doneRows = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+          .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "completed")));
+        const billsNow = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, pkg.id));
+        const billedW = billsNow.reduce((s, x) => s + x.washesCount, 0);
+        const unbilled = doneRows.length - billedW;
+        if (unbilled > 0 && rate > 0) {
+          const nextWeek = billsNow.reduce((m, x) => Math.max(m, x.weekIndex + 1), 0);
+          const end = new Date(now);
+          await db.insert(packageBillsTable).values({
+            subscriptionId: pkg.id, weekIndex: nextWeek, weekStart: end, weekEnd: end,
+            washesCount: unbilled, amountDue: unbilled * rate, status: "due", dueDate: new Date(now + GRACE_MS),
+          }).onConflictDoNothing();
+        }
         // Past the 3-day grace → auto-cancel the package.
         await db.update(subscriptionsTable).set({ status: "cancelled" }).where(eq(subscriptionsTable.id, pkg.id));
         await db.update(bookingsTable).set({ status: "cancelled", cleanerId: null })
@@ -86,25 +102,31 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
       }
     }
 
-    // 4) Package finished (past its end date) → settle any remaining washes, close it,
-    //    and invite the owner to renew.
+    // 4) Package finished → settle any remaining washes, close it, invite renewal. Only
+    //    once EVERY day is terminal (no scheduled/accepted/arrived/in_progress left), so
+    //    the final wash — which starts at expiresAt and finishes ~30-45 min later — is
+    //    counted and billed rather than lost.
     if (!autoCancelledThis && now > pkg.expiresAt.getTime()) {
-      const doneRows = await db.select({ id: bookingsTable.id }).from(bookingsTable)
-        .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "completed")));
-      const billsNow = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, pkg.id));
-      const billedWashes = billsNow.reduce((s, x) => s + x.washesCount, 0);
-      const unbilled = doneRows.length - billedWashes;
-      if (unbilled > 0 && rate > 0) {
-        const nextWeek = billsNow.reduce((m, x) => Math.max(m, x.weekIndex + 1), 0);
-        const end = new Date(now);
-        await db.insert(packageBillsTable).values({
-          subscriptionId: pkg.id, weekIndex: nextWeek, weekStart: end, weekEnd: end,
-          washesCount: unbilled, amountDue: unbilled * rate, status: "due",
-          dueDate: new Date(now + GRACE_MS),
-        });
+      const pending = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+        .where(and(eq(bookingsTable.subscriptionId, pkg.id), inArray(bookingsTable.status, ["scheduled", "accepted", "arrived", "in_progress"])));
+      if (pending.length === 0) {
+        const doneRows = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+          .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "completed")));
+        const billsNow = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, pkg.id));
+        const billedWashes = billsNow.reduce((s, x) => s + x.washesCount, 0);
+        const unbilled = doneRows.length - billedWashes;
+        if (unbilled > 0 && rate > 0) {
+          const nextWeek = billsNow.reduce((m, x) => Math.max(m, x.weekIndex + 1), 0);
+          const end = new Date(now);
+          await db.insert(packageBillsTable).values({
+            subscriptionId: pkg.id, weekIndex: nextWeek, weekStart: end, weekEnd: end,
+            washesCount: unbilled, amountDue: unbilled * rate, status: "due",
+            dueDate: new Date(now + GRACE_MS),
+          }).onConflictDoNothing();
+        }
+        await db.update(subscriptionsTable).set({ status: "expired" }).where(eq(subscriptionsTable.id, pkg.id));
+        await pushUser(pkg.customerId, "Package finished 🎉", "Your daily wash package has ended. Tap to start a new one and keep your car spotless.", { type: "package_ended", subscriptionId: pkg.id });
       }
-      await db.update(subscriptionsTable).set({ status: "expired" }).where(eq(subscriptionsTable.id, pkg.id));
-      await pushUser(pkg.customerId, "Package finished 🎉", "Your daily wash package has ended. Tap to start a new one and keep your car spotless.", { type: "package_ended", subscriptionId: pkg.id });
     }
   }
 

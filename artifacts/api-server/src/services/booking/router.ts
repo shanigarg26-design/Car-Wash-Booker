@@ -393,6 +393,13 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
   if (outcome.booking.subscriptionId) {
     const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, outcome.booking.subscriptionId));
     if (pkg && pkg.kind === "daily" && pkg.cleanerId == null) {
+      // Don't bind him to the WHOLE package if he already serves another active daily
+      // package at the same daily time — that would double-book him every day. He still
+      // handles just this one day; the package stays unbound and re-dispatches tomorrow.
+      const others = await db.select({ dailyMinutes: subscriptionsTable.dailyMinutes }).from(subscriptionsTable)
+        .where(and(eq(subscriptionsTable.cleanerId, cleaner.id), eq(subscriptionsTable.kind, "daily"), eq(subscriptionsTable.status, "active")));
+      const slotClash = others.some(o => o.dailyMinutes === pkg.dailyMinutes);
+      if (!slotClash) {
       await db.update(subscriptionsTable)
         .set({ cleanerId: cleaner.id, pricePerWash: cleaner.pricePerClean, preferredCleanerId: cleaner.id })
         .where(and(eq(subscriptionsTable.id, pkg.id), isNull(subscriptionsTable.cleanerId)));
@@ -402,6 +409,7 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
       await db.update(bookingsTable)
         .set({ priceQuoted: cleaner.pricePerClean, cleanerId: cleaner.id })
         .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "scheduled")));
+      }
     }
   }
 

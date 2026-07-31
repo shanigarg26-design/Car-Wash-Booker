@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
  * A weekly bill for a postpaid "daily" package. One row per completed week; the
@@ -18,6 +18,9 @@ export const packageBillsTable = pgTable("package_bills", {
   paidAt: timestamp("paid_at", { withTimezone: true }),
   remindedAt: timestamp("reminded_at", { withTimezone: true }),      // last overdue nudge
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({
+  // One bill per (package, week) — prevents concurrent/overlapping sweeps double-billing.
+  uniqWeek: uniqueIndex("package_bills_sub_week_uq").on(t.subscriptionId, t.weekIndex),
+}));
 
 export type PackageBill = typeof packageBillsTable.$inferSelect;
