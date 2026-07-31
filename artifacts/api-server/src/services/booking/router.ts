@@ -6,7 +6,7 @@
  */
 import { Router, type IRouter } from "express";
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable, subscriptionsTable } from "@workspace/db";
-import { eq, and, ne, inArray } from "drizzle-orm";
+import { eq, and, ne, inArray, gt } from "drizzle-orm";
 import {
   CreateBookingBody,
   GetBookingParams,
@@ -124,14 +124,29 @@ router.post("/bookings", async (req, res): Promise<void> => {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
-  // Prevent duplicate simultaneous bookings — a customer can only have one active
-  // booking at a time. Avoids accidental double-taps creating parallel searches.
-  const activeStatuses = ["searching", "accepted", "arrived", "in_progress"] as const;
-  const [activeExisting] = await db.select({ id: bookingsTable.id, status: bookingsTable.status })
-    .from(bookingsTable)
-    .where(and(eq(bookingsTable.customerId, userId), inArray(bookingsTable.status, activeStatuses as unknown as string[])));
-  if (activeExisting) {
-    res.status(409).json({ error: "active_booking_exists", message: "You already have a booking in progress.", bookingId: activeExisting.id });
+  const cleanTypeFinal = washType ?? "exterior";
+
+  // Quantity: a customer can book several cars at once (e.g. two cars at home).
+  // Clamp to a sane range so an abusive payload can't spawn hundreds of searches.
+  const quantity = Math.min(Math.max(Math.trunc(Number(req.body?.quantity)) || 1, 1), 5);
+
+  // Customers may now have MULTIPLE active bookings (different cars). We only guard
+  // against an accidental double-tap: an identical booking (same address, vehicle and
+  // wash type) created in the last few seconds. Deliberate bookings — a different car,
+  // or the same car a moment later, or a batch via `quantity` — are allowed.
+  const activeStatuses = ["searching", "scheduled", "accepted", "arrived", "in_progress"] as const;
+  const dupeCutoff = new Date(Date.now() - 8000);
+  const dupeConds = [
+    eq(bookingsTable.customerId, userId),
+    eq(bookingsTable.customerAddress, customerAddress),
+    eq(bookingsTable.cleanType, cleanTypeFinal),
+    gt(bookingsTable.createdAt, dupeCutoff),
+    inArray(bookingsTable.status, activeStatuses as unknown as string[]),
+  ];
+  if (vehicleType) dupeConds.push(eq(bookingsTable.vehicleType, vehicleType));
+  const [dupe] = await db.select({ id: bookingsTable.id }).from(bookingsTable).where(and(...dupeConds));
+  if (dupe) {
+    res.status(409).json({ error: "duplicate_too_fast", message: "Looks like a duplicate tap — please wait a moment before booking the same car again." });
     return;
   }
 
@@ -145,32 +160,45 @@ router.post("/bookings", async (req, res): Promise<void> => {
     return;
   }
 
-  const price          = calcPrice(vehicleType, washType);
-  const cleanTypeFinal = washType ?? "exterior";
+  const price = calcPrice(vehicleType, washType);
 
-  // If the customer has an active prepaid package covering this vehicle+clean,
-  // this wash is covered (they'll owe ₹0). Reserve one wash from it.
-  const coveringSub = await findCoveringSubscription(userId, vehicleType ?? null, cleanTypeFinal);
+  // Prepaid package coverage: apply it across the batch up to the package's remaining
+  // washes (findCoveringSubscription only reads, so we track remaining capacity here).
+  const coveringSub    = await findCoveringSubscription(userId, vehicleType ?? null, cleanTypeFinal);
+  let remainingCovered = coveringSub ? Math.max(0, coveringSub.washesTotal - coveringSub.washesUsed) : 0;
 
-  const [booking] = await db.insert(bookingsTable).values({
-    customerId: userId, cleanerId: null, customerAddress,
-    customerLat: lat, customerLng: lng, scheduledAt: scheduledFor,
-    notes: notes ?? null, vehicleType: vehicleType ?? null,
-    cleanType: cleanTypeFinal, priceQuoted: price, status: isScheduled ? "scheduled" : "searching",
-    subscriptionId: coveringSub?.id ?? null,
-  }).returning();
+  const created: (typeof bookingsTable.$inferSelect)[] = [];
+  for (let i = 0; i < quantity; i++) {
+    const subId = remainingCovered > 0 ? coveringSub!.id : null;
+    if (subId) remainingCovered--;
 
-  // Only dispatch immediate bookings. Scheduled ones are picked up at their time
-  // by the sweep cron (promoteScheduledBookings in dispatcher.ts).
-  if (!isScheduled) {
-    await dispatchToNearestCleaners(booking.id, lat, lng, [], MAX_DISPATCH, {
-      vehicleType: vehicleType ?? null, cleanType: cleanTypeFinal, address: customerAddress, price,
-    });
-    scheduleSearchRetry(booking.id, lat, lng, vehicleType ?? null, cleanTypeFinal, customerAddress, price, Date.now());
+    const [booking] = await db.insert(bookingsTable).values({
+      customerId: userId, cleanerId: null, customerAddress,
+      customerLat: lat, customerLng: lng, scheduledAt: scheduledFor,
+      notes: notes ?? null, vehicleType: vehicleType ?? null,
+      cleanType: cleanTypeFinal, priceQuoted: price, status: isScheduled ? "scheduled" : "searching",
+      subscriptionId: subId,
+    }).returning();
+
+    // Only dispatch immediate bookings. Scheduled ones are picked up at their time
+    // by the sweep cron (promoteScheduledBookings in dispatcher.ts).
+    if (!isScheduled) {
+      await dispatchToNearestCleaners(booking.id, lat, lng, [], MAX_DISPATCH, {
+        vehicleType: vehicleType ?? null, cleanType: cleanTypeFinal, address: customerAddress, price,
+      });
+      scheduleSearchRetry(booking.id, lat, lng, vehicleType ?? null, cleanTypeFinal, customerAddress, price, Date.now());
+    }
+    created.push(booking);
   }
 
-  const enriched = await enrichBooking(booking);
-  res.status(201).json(GetBookingResponse.parse(enriched));
+  // Return the first booking (backward compatible with single-booking clients).
+  // The full set is available under `bookings` for multi-car aware clients.
+  const enrichedAll = await Promise.all(created.map(b => enrichBooking(b)));
+  res.status(201).json({
+    ...GetBookingResponse.parse(enrichedAll[0]),
+    bookings: enrichedAll.map(e => GetBookingResponse.parse(e)),
+    quantity,
+  });
 });
 
 // ── PATCH /api/bookings/:id/edit ──────────────────────────────────────────────

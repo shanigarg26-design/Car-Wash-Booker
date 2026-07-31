@@ -51,6 +51,7 @@ export default function BookScreen() {
   const [vehicleType, setVehicleType] = useState<string | null>(null);
   const [washType, setWashType] = useState<WashType>('exterior');
   const [scheduleAt, setScheduleAt] = useState<string | null>(null); // null = book now
+  const [quantity, setQuantity] = useState(1); // how many cars of this type to book
 
   /* ── Reverse-geocode lat/lng → human address via our API server (OSM) ── */
   const reverseGeocodeCoords = async (lat: number, lng: number): Promise<string> => {
@@ -176,7 +177,10 @@ export default function BookScreen() {
       body: JSON.stringify(data),
     }),
     onSuccess: (booking: any) => {
-      router.replace(`/booking/${booking.id}`);
+      // Booking one car → open its live tracking screen. Booking several at once →
+      // go to My Bookings where all of them are listed.
+      if (quantity > 1) router.replace('/(tabs)/bookings');
+      else router.replace(`/booking/${booking.id}`);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to create booking'),
   });
@@ -198,6 +202,7 @@ export default function BookScreen() {
       vehicleType,
       washType,
       scheduledAt: scheduleAt || undefined,
+      quantity,
     });
   };
 
@@ -471,6 +476,33 @@ export default function BookScreen() {
           </View>
         </View>
 
+        {/* ── How many cars ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            <AppIcon name="truck" size={14} color={Colors.dark.tint} /> How many cars?
+          </Text>
+          <Text style={styles.quantityHint}>Booking more than one sends a separate request for each car of this type.</Text>
+          <View style={styles.quantityRow}>
+            <TouchableOpacity
+              style={[styles.qtyBtn, quantity <= 1 && styles.qtyBtnDisabled]}
+              onPress={() => setQuantity(q => Math.max(1, q - 1))}
+              disabled={quantity <= 1}
+              activeOpacity={0.8}
+            >
+              <AppIcon name="minus" size={20} color={quantity <= 1 ? Colors.dark.tabIconDefault : Colors.dark.text} />
+            </TouchableOpacity>
+            <Text style={styles.qtyValue}>{quantity}</Text>
+            <TouchableOpacity
+              style={[styles.qtyBtn, quantity >= 5 && styles.qtyBtnDisabled]}
+              onPress={() => setQuantity(q => Math.min(5, q + 1))}
+              disabled={quantity >= 5}
+              activeOpacity={0.8}
+            >
+              <AppIcon name="plus" size={20} color={quantity >= 5 ? Colors.dark.tabIconDefault : Colors.dark.text} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* ── When ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
@@ -529,8 +561,8 @@ export default function BookScreen() {
       <View style={[styles.footer, { paddingBottom: insets.bottom || 24 }]}>
         {price !== null && (
           <View style={styles.priceBanner}>
-            <Text style={styles.priceBannerLabel}>Total Price</Text>
-            <Text style={styles.priceBannerValue}>₹{price}</Text>
+            <Text style={styles.priceBannerLabel}>{quantity > 1 ? `Total (${quantity} cars)` : 'Total Price'}</Text>
+            <Text style={styles.priceBannerValue}>₹{price * quantity}</Text>
           </View>
         )}
         <TouchableOpacity
@@ -543,7 +575,11 @@ export default function BookScreen() {
           ) : (
             <>
               <AppIcon name={scheduleAt ? 'clock' : 'search'} size={20} color="#FFF" />
-              <Text style={styles.bookBtnText}>{scheduleAt ? 'Schedule Wash' : 'Find Nearest Cleaner'}</Text>
+              <Text style={styles.bookBtnText}>
+                {scheduleAt
+                  ? (quantity > 1 ? `Schedule ${quantity} Washes` : 'Schedule Wash')
+                  : (quantity > 1 ? `Find Cleaners for ${quantity} Cars` : 'Find Nearest Cleaner')}
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -623,6 +659,14 @@ const styles = StyleSheet.create({
   content: { flex: 1 },
   section: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 4 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: Colors.dark.text, marginBottom: 4 },
+  quantityHint: { fontSize: 12, color: Colors.dark.tabIconDefault, marginTop: 4, marginBottom: 12 },
+  quantityRow: { flexDirection: 'row', alignItems: 'center', gap: 20 },
+  qtyBtn: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.dark.card,
+    borderWidth: 1.5, borderColor: Colors.dark.border, alignItems: 'center', justifyContent: 'center',
+  },
+  qtyBtnDisabled: { opacity: 0.4 },
+  qtyValue: { fontSize: 24, fontWeight: '700', color: Colors.dark.text, minWidth: 32, textAlign: 'center' },
   optionalLabel: { color: Colors.dark.tabIconDefault, fontWeight: '400', fontSize: 13 },
 
   // Location

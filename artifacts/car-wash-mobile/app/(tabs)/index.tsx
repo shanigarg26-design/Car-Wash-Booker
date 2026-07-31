@@ -103,7 +103,8 @@ function CustomerDashboard({ user }: { user: any }) {
     refetchInterval: 5000,
   });
 
-  const activeBooking = bookings?.find((b: any) => (ACTIVE_STATUSES as readonly string[]).includes(b.status));
+  const activeBookings = bookings?.filter((b: any) => (ACTIVE_STATUSES as readonly string[]).includes(b.status)) || [];
+  const hasActive = activeBookings.length > 0;
   const recentBookings = bookings
     ?.filter((b: any) => !(ACTIVE_STATUSES as readonly string[]).includes(b.status))
     ?.slice(0, 5) || [];
@@ -126,14 +127,18 @@ function CustomerDashboard({ user }: { user: any }) {
         </View>
       </View>
 
-      {activeBooking && (
+      {hasActive && (
         <View style={{ marginBottom: 20 }}>
-          <Text style={styles.sectionTitle}>Active Request</Text>
-          <ActiveBookingBanner booking={activeBooking} />
+          <Text style={styles.sectionTitle}>
+            {activeBookings.length > 1 ? `Active Requests (${activeBookings.length})` : 'Active Request'}
+          </Text>
+          {activeBookings.map((b: any) => (
+            <ActiveBookingBanner key={b.id} booking={b} />
+          ))}
         </View>
       )}
 
-      {!activeBooking && (
+      {!hasActive && (
         <TouchableOpacity
           style={styles.heroCard}
           onPress={() => router.push('/book')}
@@ -153,14 +158,14 @@ function CustomerDashboard({ user }: { user: any }) {
         </TouchableOpacity>
       )}
 
-      {activeBooking && (
+      {hasActive && (
         <TouchableOpacity
           style={[styles.heroCard, styles.heroCardSmall]}
           onPress={() => router.push('/book')}
           activeOpacity={0.9}
         >
           <AppIcon name="plus-circle" size={22} color="#FFF" />
-          <Text style={styles.heroCtaText}>Book Another Clean</Text>
+          <Text style={styles.heroCtaText}>Book Another Car</Text>
         </TouchableOpacity>
       )}
 

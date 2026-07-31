@@ -2,8 +2,8 @@ import React from 'react';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, Award, Banknote, Bell, Briefcase,
   Calendar, Car, Check, CheckCircle, ChevronRight, Circle, Clock, CreditCard, Droplet, Droplets, Pencil,
-  FileText, Home, Info, Loader, LogIn, LogOut, Mail, MapPin, MapPinOff, MessageCircle, Navigation,
-  Phone, PlusCircle, RefreshCw, Search, Send, Shield, Smartphone, Star,
+  FileText, Home, Info, Loader, LogIn, LogOut, Mail, MapPin, MapPinOff, MessageCircle, Minus, Navigation,
+  Phone, Plus, PlusCircle, RefreshCw, Search, Send, Shield, Smartphone, Star,
   Tag, Terminal, Truck, User, UserCheck, X, XCircle, Zap,
 } from 'lucide-react-native';
 
@@ -37,8 +37,10 @@ const ICON_MAP: Record<string, React.ComponentType<any>> = {
   'map-pin': MapPin,
   'map-pin-off': MapPinOff,
   'message-circle': MessageCircle,
+  'minus': Minus,
   'navigation': Navigation,
   'phone': Phone,
+  'plus': Plus,
   'plus-circle': PlusCircle,
   'refresh-cw': RefreshCw,
   'search': Search,
