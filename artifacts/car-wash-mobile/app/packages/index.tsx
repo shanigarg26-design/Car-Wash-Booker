@@ -281,15 +281,6 @@ export default function PackagesScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionLabel}>Daily time</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-          {TIME_OPTIONS.map(m => (
-            <TouchableOpacity key={m} style={[styles.chip, dailyMinutes === m && styles.chipActive]} onPress={() => setDailyMinutes(m)}>
-              <Text style={[styles.chipText, dailyMinutes === m && styles.chipTextActive]}>{minutesLabel(m)}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
         <Text style={styles.sectionLabel}>Duration</Text>
         <View style={styles.washRow}>
           {DURATIONS.map(d => (
@@ -300,39 +291,61 @@ export default function PackagesScreen() {
           ))}
         </View>
 
-        {previousWashers.length > 0 && (
-          <>
-            <Text style={styles.sectionLabel}>Washer</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
-              <TouchableOpacity style={[styles.washerChip, preferredCleanerId === null && styles.chipActive]} onPress={() => setPreferredCleanerId(null)}>
-                <Text style={[styles.washerName, preferredCleanerId === null && styles.chipTextActive]}>Auto-assign</Text>
-                <Text style={[styles.washerStatus, preferredCleanerId === null && styles.chipTextActive]}>First available</Text>
-              </TouchableOpacity>
-              {previousWashers.map((w: any) => {
-                const active = preferredCleanerId === w.cleanerId;
-                return (
-                  <TouchableOpacity
-                    key={w.cleanerId}
-                    style={[styles.washerChip, active && styles.chipActive, !w.online && styles.washerChipOff]}
-                    onPress={() => w.online && setPreferredCleanerId(w.cleanerId)}
-                    disabled={!w.online}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.washerName, active && styles.chipTextActive, !w.online && styles.washerNameOff]}>{w.name}</Text>
-                    <Text style={[styles.washerStatus, active && styles.chipTextActive, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>
-                      {w.online ? '● Online' : 'Offline'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <Text style={styles.pickerHint}>
-              {preferredCleanerId
-                ? 'The request goes straight to this washer. If he doesn’t accept, you can auto-assign or pick another.'
-                : 'Only washers who’ve cleaned your car before appear here. Offline washers can’t be picked.'}
-            </Text>
-          </>
-        )}
+        {/* Washer + daily time — pick a slot each washer is actually free for. */}
+        <Text style={styles.sectionLabel}>Washer &amp; daily time</Text>
+
+        <View style={[styles.washerCard, preferredCleanerId === null && styles.washerCardActive]}>
+          <View style={styles.washerCardHead}>
+            <Text style={styles.washerCardName}>Auto-assign</Text>
+            <Text style={styles.washerCardMeta}>First available washer</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+            {TIME_OPTIONS.map(m => {
+              const on = preferredCleanerId === null && dailyMinutes === m;
+              return (
+                <TouchableOpacity key={m} style={[styles.slotChip, on && styles.chipActive]} onPress={() => { setPreferredCleanerId(null); setDailyMinutes(m); }}>
+                  <Text style={[styles.chipText, on && styles.chipTextActive]}>{minutesLabel(m)}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        {previousWashers.map((w: any) => {
+          const isSel = preferredCleanerId === w.cleanerId;
+          const freeMins = (w.slots ?? []).map((s: number) => 360 + s * 30);
+          return (
+            <View key={w.cleanerId} style={[styles.washerCard, isSel && styles.washerCardActive, !w.online && styles.washerCardOff]}>
+              <View style={styles.washerCardHead}>
+                <Text style={styles.washerCardName}>{w.name}</Text>
+                <Text style={[styles.washerCardMeta, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>
+                  {w.online ? '● Online' : 'Offline'}{w.pricePerWash ? ` · ₹${w.pricePerWash}/wash` : ''}
+                </Text>
+              </View>
+              {!w.online ? (
+                <Text style={styles.slotNote}>Offline — can’t be selected right now.</Text>
+              ) : freeMins.length === 0 ? (
+                <Text style={styles.slotNote}>No free time slots (fully booked or none set).</Text>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                  {freeMins.map((m: number) => {
+                    const on = isSel && dailyMinutes === m;
+                    return (
+                      <TouchableOpacity key={m} style={[styles.slotChip, on && styles.chipActive]} onPress={() => { setPreferredCleanerId(w.cleanerId); setDailyMinutes(m); }}>
+                        <Text style={[styles.chipText, on && styles.chipTextActive]}>{minutesLabel(m)}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          );
+        })}
+        <Text style={styles.pickerHint}>
+          {preferredCleanerId
+            ? 'The request goes straight to this washer at the chosen time. If he doesn’t accept, you can auto-assign or pick another.'
+            : 'Auto-assign sends to whoever’s available at your chosen time. Pick a specific washer to lock him in — only slots he’s free for are shown.'}
+        </Text>
 
         <Text style={styles.sectionLabel}>Service address</Text>
         <View style={styles.locCard}>
@@ -353,7 +366,9 @@ export default function PackagesScreen() {
         >
           {createDaily.isPending
             ? <ActivityIndicator color="#FFF" />
-            : <Text style={styles.startBtnText}>Start {durationDays === 7 ? 'weekly' : 'monthly'} package · {minutesLabel(dailyMinutes)} daily</Text>}
+            : <Text style={styles.startBtnText}>
+                Start {durationDays === 7 ? 'weekly' : 'monthly'} · {minutesLabel(dailyMinutes)} · {previousWashers.find((w: any) => w.cleanerId === preferredCleanerId)?.name ?? 'auto-assign'}
+              </Text>}
         </TouchableOpacity>
         <Text style={styles.disclaimer}>No upfront payment. Each week you’ll owe (washes done × your washer’s rate), paid to the washer offline.</Text>
 
@@ -413,12 +428,15 @@ const styles = StyleSheet.create({
   washBtnTextActive: { color: '#FFF', fontWeight: '600' },
   durBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: Colors.dark.card, alignItems: 'center', borderWidth: 1, borderColor: Colors.dark.border },
   durSub: { color: Colors.dark.tabIconDefault, fontSize: 11, marginTop: 2 },
-  washerChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: Colors.dark.card, marginRight: 8, borderWidth: 1, borderColor: Colors.dark.border, minWidth: 96 },
-  washerChipOff: { opacity: 0.45 },
-  washerName: { color: Colors.dark.text, fontSize: 13, fontWeight: '600' },
-  washerNameOff: { color: Colors.dark.tabIconDefault },
-  washerStatus: { fontSize: 11, marginTop: 2 },
-  pickerHint: { color: Colors.dark.tabIconDefault, fontSize: 12, lineHeight: 17, marginBottom: 18 },
+  washerCard: { backgroundColor: Colors.dark.card, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.dark.border },
+  washerCardActive: { borderColor: Colors.dark.tint },
+  washerCardOff: { opacity: 0.55 },
+  washerCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  washerCardName: { color: Colors.dark.text, fontSize: 15, fontWeight: '700' },
+  washerCardMeta: { fontSize: 12, fontWeight: '600' },
+  slotChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, backgroundColor: Colors.dark.background, marginRight: 8, borderWidth: 1, borderColor: Colors.dark.border },
+  slotNote: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 8 },
+  pickerHint: { color: Colors.dark.tabIconDefault, fontSize: 12, lineHeight: 17, marginTop: 4, marginBottom: 18 },
   unassignedBox: { backgroundColor: '#FBBF2415', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#FBBF2455' },
   unassignedTitle: { color: '#FBBF24', fontWeight: '700', fontSize: 14 },
   unassignedSub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 4, marginBottom: 10, lineHeight: 17 },

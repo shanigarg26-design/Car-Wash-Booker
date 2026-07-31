@@ -5,7 +5,7 @@
  */
 import { Router, type IRouter } from "express";
 import { db, subscriptionsTable, usersTable, bookingsTable, cleanersTable, packageBillsTable } from "@workspace/db";
-import { eq, and, gt, inArray } from "drizzle-orm";
+import { eq, and, gt, gte, inArray } from "drizzle-orm";
 import { PACKAGES, priceForPackage } from "../booking/service.js";
 import { sendPush } from "../../shared/push.js";
 
@@ -49,6 +49,26 @@ export function istDailyToUtc(dayOffset: number, minutes: number, from: Date = n
   const istMidnight = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
   const targetIstMs = istMidnight + dayOffset * 86_400_000 + minutes * 60_000;
   return new Date(targetIstMs - IST_OFFSET_MS);
+}
+
+const ALL_SLOTS = Array.from({ length: 24 }, (_, i) => i); // 06:00–17:30 IST, half-hourly
+
+/** Half-hour slot index (0..23) for a UTC instant in IST, or -1 outside 06:00–18:00. */
+function dateToIstSlot(d: Date): number {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  const h = ist.getUTCHours(), m = ist.getUTCMinutes();
+  if (h < 6 || h >= 18) return -1;
+  return (h - 6) * 2 + (m >= 30 ? 1 : 0);
+}
+/** Slot index for a daily-minutes value (e.g. 540 = 09:00 → slot 6), or -1 if out of range. */
+function minutesToSlot(minutes: number): number {
+  if (minutes < 360 || minutes >= 1080) return -1;
+  return Math.floor((minutes - 360) / 30);
+}
+function safeParseSlots(json: string | null): number[] {
+  if (!json) return [];
+  try { const a = JSON.parse(json); return Array.isArray(a) ? a.filter((n: unknown) => Number.isInteger(n)) : []; }
+  catch { return []; }
 }
 
 // GET /api/packages?vehicleType=&washType=  — the 5 plans priced for this vehicle+clean.
@@ -116,8 +136,9 @@ router.get("/subscriptions/mine", async (req, res): Promise<void> => {
 });
 
 // GET /api/subscriptions/previous-washers — washers who have completed a wash for this
-// customer, each with live online status. The owner may re-request one for a new daily
-// package; only these (and only the online ones) are selectable.
+// customer, each with live online status AND the time slots they're free for. A slot is
+// "free" when it's in the washer's chosen availability AND not already taken by one of his
+// active daily packages or upcoming bookings. Only these washers (online only) are pickable.
 router.get("/subscriptions/previous-washers", async (req, res): Promise<void> => {
   const userId = (req.session as Record<string, unknown>).userId as number | undefined;
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
@@ -130,15 +151,41 @@ router.get("/subscriptions/previous-washers", async (req, res): Promise<void> =>
   const rows = await db.select({
     id: cleanersTable.id, name: usersTable.name, price: cleanersTable.pricePerClean,
     available: cleanersTable.available, isLoggedIn: usersTable.isLoggedIn, lastSeenAt: usersTable.lastSeenAt,
+    slots: cleanersTable.availableSlots,
   }).from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
     .where(inArray(cleanersTable.id, ids));
 
+  // Build each washer's occupied slots from existing commitments.
+  const now = new Date();
+  const pkgRows = await db.select({ cleanerId: subscriptionsTable.cleanerId, dailyMinutes: subscriptionsTable.dailyMinutes })
+    .from(subscriptionsTable)
+    .where(and(inArray(subscriptionsTable.cleanerId, ids), eq(subscriptionsTable.kind, "daily"), eq(subscriptionsTable.status, "active")));
+  const bkRows = await db.select({ cleanerId: bookingsTable.cleanerId, scheduledAt: bookingsTable.scheduledAt })
+    .from(bookingsTable)
+    .where(and(inArray(bookingsTable.cleanerId, ids), inArray(bookingsTable.status, ["scheduled", "accepted", "arrived"]), gte(bookingsTable.scheduledAt, now)));
+
+  const occupied = new Map<number, Set<number>>();
+  const addOcc = (cid: number | null, slot: number) => {
+    if (cid == null || slot < 0) return;
+    if (!occupied.has(cid)) occupied.set(cid, new Set());
+    occupied.get(cid)!.add(slot);
+  };
+  for (const p of pkgRows) if (p.dailyMinutes != null) addOcc(p.cleanerId, minutesToSlot(p.dailyMinutes));
+  for (const bk of bkRows) addOcc(bk.cleanerId, dateToIstSlot(bk.scheduledAt));
+
   const STALE = 5 * 60 * 1000;
-  const now = Date.now();
-  res.json(rows.map(r => ({
-    cleanerId: r.id, name: r.name ?? "Washer", pricePerWash: r.price,
-    online: !!(r.available && r.isLoggedIn && r.lastSeenAt && now - new Date(r.lastSeenAt).getTime() < STALE),
-  })).sort((a, b) => Number(b.online) - Number(a.online)));
+  const nowMs = Date.now();
+  res.json(rows.map(r => {
+    const chosen = safeParseSlots(r.slots);
+    const base = chosen.length > 0 ? chosen : ALL_SLOTS; // no schedule set → free any time
+    const occ = occupied.get(r.id) ?? new Set<number>();
+    const freeSlots = base.filter(s => !occ.has(s)).sort((a, b) => a - b);
+    return {
+      cleanerId: r.id, name: r.name ?? "Washer", pricePerWash: r.price,
+      online: !!(r.available && r.isLoggedIn && r.lastSeenAt && nowMs - new Date(r.lastSeenAt).getTime() < STALE),
+      slots: freeSlots,
+    };
+  }).sort((a, b) => Number(b.online) - Number(a.online)));
 });
 
 // PATCH /api/subscriptions/:id/auto-assign — owner drops the preferred washer and lets
