@@ -17,8 +17,25 @@ export const subscriptionsTable = pgTable("subscriptions", {
   pricePaid: integer("price_paid").notNull(),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  status: text("status").notNull().default("active"), // active | expired | cancelled
+  status: text("status").notNull().default("active"), // active | expired | cancelled | pending_assignment | unassigned
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+
+  // ── Postpaid "daily" packages (same washer every day, billed weekly offline) ──
+  // kind: "prepaid" = legacy pay-upfront wash-credit bucket; "daily" = new model.
+  kind: text("kind").notNull().default("prepaid"),
+  // The washer bound to this package once someone accepts it. Same washer every day.
+  cleanerId: integer("cleaner_id"),
+  // Owner may request a specific washer (e.g. re-book last one); if he rejects, the
+  // owner is told to auto-assign or pick another.
+  preferredCleanerId: integer("preferred_cleaner_id"),
+  // Daily wash time as minutes from midnight IST (e.g. 540 = 09:00). Same every day.
+  dailyMinutes: integer("daily_minutes"),
+  // Per-wash price = the assigned washer's rate; drives the weekly bill.
+  pricePerWash: integer("price_per_wash"),
+  // Delivery address (same every day) captured at creation.
+  address: text("address"),
+  latitude: text("latitude"),
+  longitude: text("longitude"),
 });
 
 export type Subscription = typeof subscriptionsTable.$inferSelect;

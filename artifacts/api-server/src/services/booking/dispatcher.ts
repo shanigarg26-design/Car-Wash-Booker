@@ -8,10 +8,10 @@
  * This module is intentionally free of Express – it contains pure business logic
  * so it can be moved to a separate process or message queue in the future.
  */
-import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable } from "@workspace/db";
+import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable, subscriptionsTable } from "@workspace/db";
 import { eq, and, gte, lt, lte, inArray, isNull } from "drizzle-orm";
 import { sendPush } from "../../shared/push.js";
-import { expectedDurationMin } from "./service.js";
+import { expectedDurationMin, generateServiceOtp } from "./service.js";
 
 export const MAX_DISPATCH           = 5;
 export const MAX_DISPATCH_RADIUS_KM = 5;
@@ -268,6 +268,41 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
     and(eq(bookingsTable.status, "scheduled"), lte(bookingsTable.scheduledAt, new Date())),
   );
   for (const b of dueScheduled) {
+    // ── Daily-package days ──────────────────────────────────────────────────
+    if (b.subscriptionId) {
+      const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, b.subscriptionId));
+      // Package gone/cancelled → drop the day quietly.
+      if (!pkg || pkg.status !== "active") {
+        await db.update(bookingsTable).set({ status: "cancelled" })
+          .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled")));
+        continue;
+      }
+      // Washer already bound → assign this day straight to him (no re-dispatch;
+      // same washer every day). He goes → arrives → OTP → starts, like any job.
+      if (pkg.cleanerId != null) {
+        const otp = generateServiceOtp();
+        const [assigned] = await db.update(bookingsTable)
+          .set({ status: "accepted", cleanerId: pkg.cleanerId, serviceOtp: otp, priceQuoted: pkg.pricePerWash ?? b.priceQuoted })
+          .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
+        if (assigned) {
+          await db.insert(bookingDispatchesTable)
+            .values({ bookingId: b.id, cleanerId: pkg.cleanerId, status: "accepted" })
+            .onConflictDoNothing();
+          const [u] = await db.select({ token: usersTable.expoPushToken }).from(usersTable)
+            .leftJoin(cleanersTable, eq(cleanersTable.userId, usersTable.id))
+            .where(eq(cleanersTable.id, pkg.cleanerId));
+          if (u?.token) {
+            await sendPush([u.token], "🗓️ Today's Package Wash", `Head to ${b.customerAddress} for your daily wash.`, { type: "package_day", bookingId: b.id });
+          }
+          promotedScheduled++;
+          console.log(`[Sweep] Package booking ${b.id} assigned to bound washer ${pkg.cleanerId}`);
+        }
+        continue;
+      }
+      // Not bound yet (assignment day) → fall through to normal broadcast; the first
+      // washer to accept binds the whole package (handled in the accept endpoint).
+    }
+
     const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
       .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
     if (!promoted) continue;
@@ -297,6 +332,9 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
   const staleCutoff = new Date(now - ACCEPTED_STALE_MS);
   for (const b of accepted) {
     if (!b.cleanerId) continue;
+    // Daily-package days stay with their bound washer — never reassign to someone
+    // else. If he doesn't show, the owner marks a no-show (which extends the package).
+    if (b.subscriptionId) continue;
     const [cu] = await db
       .select({ lastSeenAt: usersTable.lastSeenAt, pushToken: usersTable.expoPushToken })
       .from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))

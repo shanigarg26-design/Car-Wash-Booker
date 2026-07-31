@@ -6,7 +6,7 @@
  */
 import { Router, type IRouter } from "express";
 import { db, bookingsTable, usersTable, cleanersTable, bookingDispatchesTable, subscriptionsTable } from "@workspace/db";
-import { eq, and, ne, inArray, gt } from "drizzle-orm";
+import { eq, and, ne, inArray, gt, isNull } from "drizzle-orm";
 import {
   CreateBookingBody,
   GetBookingParams,
@@ -386,6 +386,21 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
 
   // Stop the search loop now that the booking is claimed.
   cancelRetry(params.data.id);
+
+  // Daily package: accepting the first day BINDS this washer to the whole package —
+  // he then serves every remaining day automatically (same washer every time), and
+  // the package is billed at his per-wash rate.
+  if (outcome.booking.subscriptionId) {
+    const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, outcome.booking.subscriptionId));
+    if (pkg && pkg.kind === "daily" && pkg.cleanerId == null) {
+      await db.update(subscriptionsTable)
+        .set({ cleanerId: cleaner.id, pricePerWash: cleaner.pricePerClean, preferredCleanerId: cleaner.id })
+        .where(and(eq(subscriptionsTable.id, pkg.id), isNull(subscriptionsTable.cleanerId)));
+      await db.update(bookingsTable)
+        .set({ priceQuoted: cleaner.pricePerClean })
+        .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "scheduled")));
+    }
+  }
 
   const enriched  = await enrichBooking(outcome.booking);
 
