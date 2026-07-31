@@ -111,8 +111,69 @@ router.get("/subscriptions/mine", async (req, res): Promise<void> => {
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
   const subs = await db.select().from(subscriptionsTable)
-    .where(and(eq(subscriptionsTable.customerId, userId), eq(subscriptionsTable.status, "active"), gt(subscriptionsTable.expiresAt, new Date())));
+    .where(and(eq(subscriptionsTable.customerId, userId), inArray(subscriptionsTable.status, ["active", "unassigned"]), gt(subscriptionsTable.expiresAt, new Date())));
   res.json(await Promise.all(subs.map(enrichPackage)));
+});
+
+// GET /api/subscriptions/previous-washers — washers who have completed a wash for this
+// customer, each with live online status. The owner may re-request one for a new daily
+// package; only these (and only the online ones) are selectable.
+router.get("/subscriptions/previous-washers", async (req, res): Promise<void> => {
+  const userId = (req.session as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+  const done = await db.select({ cleanerId: bookingsTable.cleanerId }).from(bookingsTable)
+    .where(and(eq(bookingsTable.customerId, userId), eq(bookingsTable.status, "completed")));
+  const ids = [...new Set(done.map(d => d.cleanerId).filter((x): x is number => x != null))];
+  if (ids.length === 0) { res.json([]); return; }
+
+  const rows = await db.select({
+    id: cleanersTable.id, name: usersTable.name, price: cleanersTable.pricePerClean,
+    available: cleanersTable.available, isLoggedIn: usersTable.isLoggedIn, lastSeenAt: usersTable.lastSeenAt,
+  }).from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
+    .where(inArray(cleanersTable.id, ids));
+
+  const STALE = 5 * 60 * 1000;
+  const now = Date.now();
+  res.json(rows.map(r => ({
+    cleanerId: r.id, name: r.name ?? "Washer", pricePerWash: r.price,
+    online: !!(r.available && r.isLoggedIn && r.lastSeenAt && now - new Date(r.lastSeenAt).getTime() < STALE),
+  })).sort((a, b) => Number(b.online) - Number(a.online)));
+});
+
+// PATCH /api/subscriptions/:id/auto-assign — owner drops the preferred washer and lets
+// the package dispatch to any available washer (used after a requested washer declines).
+router.patch("/subscriptions/:id/auto-assign", async (req, res): Promise<void> => {
+  const userId = (req.session as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, id));
+  if (!sub || sub.customerId !== userId) { res.status(403).json({ error: "Not your package" }); return; }
+  await db.update(subscriptionsTable).set({ status: "active", preferredCleanerId: null }).where(eq(subscriptionsTable.id, id));
+  res.json({ ok: true });
+});
+
+// PATCH /api/subscriptions/:id/reassign { cleanerId } — owner requests a different
+// previous washer. Only a washer who has worked for this customer, and is online, is allowed.
+router.patch("/subscriptions/:id/reassign", async (req, res): Promise<void> => {
+  const userId = (req.session as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+  const id = parseInt(req.params.id, 10);
+  const cleanerId = Number((req.body as Record<string, unknown>).cleanerId);
+  if (isNaN(id) || !Number.isInteger(cleanerId)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, id));
+  if (!sub || sub.customerId !== userId) { res.status(403).json({ error: "Not your package" }); return; }
+
+  // Must be a washer who previously completed a wash for this customer.
+  const [prior] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+    .where(and(eq(bookingsTable.customerId, userId), eq(bookingsTable.cleanerId, cleanerId), eq(bookingsTable.status, "completed")));
+  if (!prior) { res.status(400).json({ error: "not_previous_washer", message: "You can only pick a washer who has cleaned your car before." }); return; }
+
+  await db.update(subscriptionsTable).set({ status: "active", preferredCleanerId: cleanerId }).where(eq(subscriptionsTable.id, id));
+  res.json({ ok: true });
 });
 
 // GET /api/subscriptions/serving — daily packages the logged-in washer is bound to.
@@ -177,12 +238,17 @@ router.post("/subscriptions/daily", async (req, res): Promise<void> => {
     res.status(400).json({ error: "no_location", message: "A service address is required." }); return;
   }
 
-  // Optional: owner requests a specific washer (e.g. re-book a previous one).
+  // Optional: owner re-requests a specific washer — only one who has cleaned his car
+  // before (verified via a prior completed booking).
   let preferredCleanerId: number | null = null;
   let preferredRate: number | null = null;
   if (b.preferredCleanerId != null) {
-    const [c] = await db.select().from(cleanersTable).where(eq(cleanersTable.id, Number(b.preferredCleanerId)));
+    const cid = Number(b.preferredCleanerId);
+    const [c] = await db.select().from(cleanersTable).where(eq(cleanersTable.id, cid));
     if (!c) { res.status(400).json({ error: "unknown_washer", message: "That washer is unavailable." }); return; }
+    const [prior] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+      .where(and(eq(bookingsTable.customerId, userId), eq(bookingsTable.cleanerId, cid), eq(bookingsTable.status, "completed")));
+    if (!prior) { res.status(400).json({ error: "not_previous_washer", message: "You can only request a washer who has cleaned your car before." }); return; }
     preferredCleanerId = c.id;
     preferredRate = c.pricePerClean;
   }

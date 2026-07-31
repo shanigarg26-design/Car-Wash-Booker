@@ -43,6 +43,45 @@ function worksThisSlot(availableSlots: string | null, slot: number): boolean {
     return arr.includes(slot);
   } catch { return true; }
 }
+
+/** Send a booking to exactly ONE cleaner (used when the owner requests a specific washer). */
+export async function dispatchToSpecificCleaner(
+  bookingId: number, cleanerId: number,
+  notification: { vehicleType: string | null; cleanType: string; address: string; price: number },
+): Promise<void> {
+  await db.insert(bookingDispatchesTable).values({ bookingId, cleanerId, status: "pending" }).onConflictDoNothing();
+  const [row] = await db.select({ token: usersTable.expoPushToken })
+    .from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
+    .where(eq(cleanersTable.id, cleanerId));
+  if (row?.token) {
+    const cleanLabel = notification.cleanType === "both" ? "Full (Ext + Int)" : "Exterior";
+    await sendPush([row.token], "🚗 Daily Package Request",
+      `${notification.vehicleType ?? "Vehicle"} · ${cleanLabel} · ₹${notification.price}\n📍 ${notification.address}`,
+      { type: "package_request", bookingId });
+  }
+}
+
+/**
+ * A requested (preferred) washer didn't take the day — hand the package back to the
+ * owner. The day is returned to 'scheduled' (not lost) and the package is paused
+ * ('unassigned') until the owner chooses auto-assign or another washer.
+ */
+export async function pausePackageForOwnerChoice(
+  pkg: { id: number; customerId: number }, bookingId: number, reason: "declined" | "offline",
+): Promise<void> {
+  await db.update(bookingsTable).set({ status: "scheduled", cleanerId: null }).where(eq(bookingsTable.id, bookingId));
+  await db.update(bookingDispatchesTable).set({ status: "cancelled" })
+    .where(and(eq(bookingDispatchesTable.bookingId, bookingId), eq(bookingDispatchesTable.status, "pending")));
+  await db.update(subscriptionsTable).set({ status: "unassigned" }).where(eq(subscriptionsTable.id, pkg.id));
+  const [cust] = await db.select({ token: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, pkg.customerId));
+  if (cust?.token) {
+    await sendPush([cust.token], "Washer didn't accept",
+      reason === "offline"
+        ? "Your requested washer went offline. Choose auto-assign or pick another washer."
+        : "Your requested washer declined. Choose auto-assign or pick another washer.",
+      { type: "package_needs_owner", subscriptionId: pkg.id });
+  }
+}
 // If a cleaner ACCEPTS a job then goes offline (phone off) before arriving, the booking
 // is auto-reassigned once their heartbeat is older than this.
 export const ACCEPTED_STALE_MS      = 3 * 60 * 1000;   // 3 minutes
@@ -299,8 +338,35 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
         }
         continue;
       }
-      // Not bound yet (assignment day) → fall through to normal broadcast; the first
-      // washer to accept binds the whole package (handled in the accept endpoint).
+      // Assignment day, not bound yet.
+      if (pkg.preferredCleanerId != null) {
+        // Owner requested a specific previous washer → send ONLY to him (no broadcast).
+        const [pref] = await db.select({
+          available: cleanersTable.available, isLoggedIn: usersTable.isLoggedIn, lastSeenAt: usersTable.lastSeenAt,
+        }).from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
+          .where(eq(cleanersTable.id, pkg.preferredCleanerId));
+        const online = !!(pref?.available && pref.isLoggedIn && pref.lastSeenAt && Date.now() - pref.lastSeenAt.getTime() < ONLINE_STALE_MS);
+        const [busyPref] = online
+          ? await db.select({ id: bookingsTable.id }).from(bookingsTable)
+              .where(and(eq(bookingsTable.cleanerId, pkg.preferredCleanerId), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])))
+          : [undefined];
+        if (online && !busyPref) {
+          const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
+            .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
+          if (promoted) {
+            await dispatchToSpecificCleaner(b.id, pkg.preferredCleanerId,
+              { vehicleType: b.vehicleType, cleanType: b.cleanType ?? "exterior", address: b.customerAddress, price: b.priceQuoted });
+            promotedScheduled++;
+            console.log(`[Sweep] Package ${pkg.id} day ${b.id} sent to requested washer ${pkg.preferredCleanerId}`);
+          }
+        } else {
+          // Requested washer offline/busy → hand back to the owner to choose.
+          await pausePackageForOwnerChoice(pkg, b.id, "offline");
+        }
+        continue;
+      }
+      // Not bound and no preferred → fall through to normal broadcast; the first washer
+      // to accept binds the whole package (handled in the accept endpoint).
     }
 
     const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
@@ -319,6 +385,15 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
   );
   for (const b of staleSearching) {
     cancelRetry(b.id);
+    // A requested-washer package day that was never accepted → hand back to the owner
+    // (choose auto-assign or another washer) instead of losing the day.
+    if (b.subscriptionId) {
+      const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, b.subscriptionId));
+      if (pkg && pkg.status === "active" && pkg.cleanerId == null && pkg.preferredCleanerId != null) {
+        await pausePackageForOwnerChoice(pkg, b.id, "declined");
+        continue;
+      }
+    }
     await db.update(bookingDispatchesTable).set({ status: "cancelled" })
       .where(and(eq(bookingDispatchesTable.bookingId, b.id), eq(bookingDispatchesTable.status, "pending")));
     await db.update(bookingsTable).set({ status: "cancelled" })

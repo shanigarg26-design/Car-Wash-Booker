@@ -49,9 +49,13 @@ export default function PackagesScreen() {
   const [loc, setLoc] = useState<Loc | null>(null);
   const [locStatus, setLocStatus] = useState<'detecting' | 'done' | 'failed'>('detecting');
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [preferredCleanerId, setPreferredCleanerId] = useState<number | null>(null);
 
   const { data: mine, isLoading } = useQuery({ queryKey: ['mySubs'], queryFn: () => apiFetch('/api/subscriptions/mine') });
   const dailyPackages = (mine ?? []).filter((s: any) => s.kind === 'daily');
+  // Washers who've cleaned this car before, with live online status (only these are pickable).
+  const { data: prevWashers } = useQuery({ queryKey: ['prevWashers'], queryFn: () => apiFetch('/api/subscriptions/previous-washers'), refetchInterval: 15000 });
+  const previousWashers = prevWashers ?? [];
 
   const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
     try {
@@ -98,13 +102,28 @@ export default function PackagesScreen() {
         vehicleType, washType, dailyMinutes, durationDays,
         address: loc?.address || user?.address || 'Current location',
         latitude: loc?.lat, longitude: loc?.lng,
+        preferredCleanerId: preferredCleanerId ?? undefined,
       }),
     }),
     onSuccess: () => {
       invalidate();
-      Alert.alert('Package started ✓', 'Your first wash request goes out at the daily time. Whoever accepts becomes your washer for the whole package.');
+      setPreferredCleanerId(null);
+      Alert.alert('Package started ✓', preferredCleanerId
+        ? 'Your requested washer will get the request at the daily time. If he doesn’t accept, you can auto-assign or pick another.'
+        : 'Your first wash request goes out at the daily time. Whoever accepts becomes your washer for the whole package.');
     },
     onError: (e: any) => Alert.alert('Could not start package', e?.message || 'Please try again.'),
+  });
+
+  const autoAssign = useMutation({
+    mutationFn: (id: number) => apiFetch(`/api/subscriptions/${id}/auto-assign`, { method: 'PATCH' }),
+    onSuccess: invalidate,
+    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not update.'),
+  });
+  const reassign = useMutation({
+    mutationFn: (v: { id: number; cleanerId: number }) => apiFetch(`/api/subscriptions/${v.id}/reassign`, { method: 'PATCH', body: JSON.stringify({ cleanerId: v.cleanerId }) }),
+    onSuccess: invalidate,
+    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not reassign.'),
   });
 
   const cancelPackage = useMutation({
@@ -147,6 +166,23 @@ export default function PackagesScreen() {
           const now = Date.now();
           return (
             <View key={s.id} style={styles.pkgCard}>
+              {s.status === 'unassigned' && (
+                <View style={styles.unassignedBox}>
+                  <Text style={styles.unassignedTitle}>Requested washer didn’t accept</Text>
+                  <Text style={styles.unassignedSub}>Auto-assign to any available washer, or pick another you’ve used before:</Text>
+                  <TouchableOpacity style={styles.autoAssignBtn} onPress={() => autoAssign.mutate(s.id)}>
+                    <Text style={styles.autoAssignText}>Auto-assign</Text>
+                  </TouchableOpacity>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                    {previousWashers.filter((w: any) => w.online && w.cleanerId !== s.preferredCleanerId).map((w: any) => (
+                      <TouchableOpacity key={w.cleanerId} style={styles.reassignChip} onPress={() => reassign.mutate({ id: s.id, cleanerId: w.cleanerId })}>
+                        <Text style={styles.reassignName}>{w.name}</Text>
+                        <Text style={styles.reassignOnline}>● Online</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
               <View style={styles.pkgTop}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.pkgTitle}>{minutesLabel(s.dailyMinutes)} daily · {s.washesTotal} washes</Text>
@@ -264,6 +300,40 @@ export default function PackagesScreen() {
           ))}
         </View>
 
+        {previousWashers.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>Washer</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+              <TouchableOpacity style={[styles.washerChip, preferredCleanerId === null && styles.chipActive]} onPress={() => setPreferredCleanerId(null)}>
+                <Text style={[styles.washerName, preferredCleanerId === null && styles.chipTextActive]}>Auto-assign</Text>
+                <Text style={[styles.washerStatus, preferredCleanerId === null && styles.chipTextActive]}>First available</Text>
+              </TouchableOpacity>
+              {previousWashers.map((w: any) => {
+                const active = preferredCleanerId === w.cleanerId;
+                return (
+                  <TouchableOpacity
+                    key={w.cleanerId}
+                    style={[styles.washerChip, active && styles.chipActive, !w.online && styles.washerChipOff]}
+                    onPress={() => w.online && setPreferredCleanerId(w.cleanerId)}
+                    disabled={!w.online}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.washerName, active && styles.chipTextActive, !w.online && styles.washerNameOff]}>{w.name}</Text>
+                    <Text style={[styles.washerStatus, active && styles.chipTextActive, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>
+                      {w.online ? '● Online' : 'Offline'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <Text style={styles.pickerHint}>
+              {preferredCleanerId
+                ? 'The request goes straight to this washer. If he doesn’t accept, you can auto-assign or pick another.'
+                : 'Only washers who’ve cleaned your car before appear here. Offline washers can’t be picked.'}
+            </Text>
+          </>
+        )}
+
         <Text style={styles.sectionLabel}>Service address</Text>
         <View style={styles.locCard}>
           <AppIcon name="map-pin" size={16} color={Colors.dark.tint} />
@@ -343,6 +413,20 @@ const styles = StyleSheet.create({
   washBtnTextActive: { color: '#FFF', fontWeight: '600' },
   durBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: Colors.dark.card, alignItems: 'center', borderWidth: 1, borderColor: Colors.dark.border },
   durSub: { color: Colors.dark.tabIconDefault, fontSize: 11, marginTop: 2 },
+  washerChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: Colors.dark.card, marginRight: 8, borderWidth: 1, borderColor: Colors.dark.border, minWidth: 96 },
+  washerChipOff: { opacity: 0.45 },
+  washerName: { color: Colors.dark.text, fontSize: 13, fontWeight: '600' },
+  washerNameOff: { color: Colors.dark.tabIconDefault },
+  washerStatus: { fontSize: 11, marginTop: 2 },
+  pickerHint: { color: Colors.dark.tabIconDefault, fontSize: 12, lineHeight: 17, marginBottom: 18 },
+  unassignedBox: { backgroundColor: '#FBBF2415', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#FBBF2455' },
+  unassignedTitle: { color: '#FBBF24', fontWeight: '700', fontSize: 14 },
+  unassignedSub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 4, marginBottom: 10, lineHeight: 17 },
+  autoAssignBtn: { backgroundColor: Colors.dark.tint, borderRadius: 10, paddingVertical: 10, alignItems: 'center', marginBottom: 8 },
+  autoAssignText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
+  reassignChip: { backgroundColor: Colors.dark.card, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8, borderWidth: 1, borderColor: Colors.dark.border },
+  reassignName: { color: Colors.dark.text, fontSize: 13, fontWeight: '600' },
+  reassignOnline: { color: Colors.dark.success, fontSize: 11, marginTop: 2 },
   locCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: Colors.dark.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: Colors.dark.border, marginBottom: 20 },
   locText: { color: Colors.dark.text, fontSize: 13, flex: 1 },
   retry: { color: Colors.dark.tint, fontSize: 13, fontWeight: '600' },
