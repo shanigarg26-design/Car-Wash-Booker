@@ -240,13 +240,20 @@ function CleanerDashboard() {
     refetchInterval: 4000,
   });
 
-  const incomingRequests = (bookings?.filter((b: any) => b.status === 'searching') || []).map((b: any) => ({
+  const activeJobs = bookings?.filter((b: any) => ['accepted', 'arrived', 'in_progress'].includes(b.status)) || [];
+  // A cleaner handles one job at a time. While a job is active, hide incoming
+  // requests entirely — the others "go away". When that job ends (completed or
+  // cancelled), any still-searching requests dispatched to this cleaner come
+  // back automatically on the next poll.
+  const incomingRequests = (activeJobs.length > 0
+    ? []
+    : (bookings?.filter((b: any) => b.status === 'searching') || [])
+  ).map((b: any) => ({
     ...b,
     distanceKm: (cleanerCoords && b.customerLat != null && b.customerLng != null)
       ? haversineKm(cleanerCoords.lat, cleanerCoords.lng, b.customerLat, b.customerLng)
       : undefined,
   }));
-  const activeJobs = bookings?.filter((b: any) => ['accepted', 'arrived', 'in_progress'].includes(b.status)) || [];
   const pastJobs = bookings?.filter((b: any) => ['completed', 'cancelled'].includes(b.status)) || [];
 
   // Track bookings that were searching but got accepted by another cleaner while this
@@ -338,6 +345,24 @@ function CleanerDashboard() {
       Alert.alert('Error', 'Could not update booking. Please try again.');
     },
   });
+
+  // Global accept lock: a cleaner can only take ONE job. The ref is set
+  // synchronously so a second simultaneous tap (on another request card) is
+  // ignored before React can re-render — you cannot accept two at once.
+  const acceptingRef = useRef(false);
+  const [accepting, setAccepting] = useState(false);
+
+  const handleAccept = (id: number) => {
+    if (acceptingRef.current || activeJobs.length > 0) return;
+    acceptingRef.current = true;
+    setAccepting(true);
+    handleStatus.mutate(
+      { id, action: 'accept' },
+      { onSettled: () => { acceptingRef.current = false; setAccepting(false); } },
+    );
+  };
+
+  const handleDecline = (id: number) => handleStatus.mutate({ id, action: 'decline' });
 
   const [cancellingId, setCancellingId] = useState<number | null>(null);
 
@@ -551,8 +576,9 @@ function CleanerDashboard() {
       bookings={incomingRequests}
       takenByOtherBookings={takenByOtherBookings}
       pendingIds={pendingIds}
-      onAccept={(id) => handleStatus.mutate({ id, action: 'accept' })}
-      onDecline={(id) => handleStatus.mutate({ id, action: 'decline' })}
+      accepting={accepting}
+      onAccept={handleAccept}
+      onDecline={handleDecline}
     />
 
     {/* Read-only informational map of the cleaner's current location */}

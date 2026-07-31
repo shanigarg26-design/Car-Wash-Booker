@@ -316,39 +316,53 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
   const [cleaner] = await db.select().from(cleanersTable).where(eq(cleanersTable.userId, userId));
   if (!cleaner) { res.status(403).json({ error: "Not a cleaner" }); return; }
 
-  // A cleaner can only handle one job at a time — block accepting a second booking
-  // while one is already in progress (accepted / arrived / in_progress).
-  const [activeJob] = await db.select({ id: bookingsTable.id }).from(bookingsTable).where(
-    and(eq(bookingsTable.cleanerId, cleaner.id), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])),
-  );
-  if (activeJob) { res.status(409).json({ error: "active_job_exists", message: "Finish your current job before accepting a new one." }); return; }
+  // A cleaner can only handle one job at a time. Do the whole check-and-claim in
+  // a single transaction that first takes a row lock on THIS cleaner (FOR UPDATE).
+  // Two accepts from the same cleaner (e.g. rapid taps on two different request
+  // cards, or two devices) serialize on that lock: the first commits its job, the
+  // second then sees the active job and is rejected — so a cleaner can never end
+  // up assigned to two bookings at once.
+  const otp = generateServiceOtp();
+  const outcome = await db.transaction(async (tx) => {
+    await tx.select({ id: cleanersTable.id }).from(cleanersTable)
+      .where(eq(cleanersTable.id, cleaner.id)).for("update");
 
-  const [dispatch] = await db.select().from(bookingDispatchesTable).where(
-    and(eq(bookingDispatchesTable.bookingId, params.data.id), eq(bookingDispatchesTable.cleanerId, cleaner.id), eq(bookingDispatchesTable.status, "pending"))
-  );
-  if (!dispatch) { res.status(403).json({ error: "Not dispatched to you or already handled" }); return; }
+    const [activeJob] = await tx.select({ id: bookingsTable.id }).from(bookingsTable).where(
+      and(eq(bookingsTable.cleanerId, cleaner.id), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])),
+    );
+    if (activeJob) return { kind: "active_job" as const };
 
-  // Atomic claim: only ONE cleaner can flip the booking from "searching" → "accepted".
-  // Conditioning the UPDATE on status='searching' means a second concurrent accept
-  // matches zero rows and loses the race (prevents double-assignment).
-  const otp       = generateServiceOtp();
-  const [updated] = await db.update(bookingsTable)
-    .set({ status: "accepted", cleanerId: cleaner.id, serviceOtp: otp })
-    .where(and(eq(bookingsTable.id, params.data.id), eq(bookingsTable.status, "searching")))
-    .returning();
-  if (!updated) { res.status(409).json({ error: "Booking already taken or not available" }); return; }
+    const [dispatch] = await tx.select().from(bookingDispatchesTable).where(
+      and(eq(bookingDispatchesTable.bookingId, params.data.id), eq(bookingDispatchesTable.cleanerId, cleaner.id), eq(bookingDispatchesTable.status, "pending"))
+    );
+    if (!dispatch) return { kind: "not_dispatched" as const };
 
-  // Won the race — finalize dispatch rows and stop the search loop.
-  await db.update(bookingDispatchesTable).set({ status: "accepted" }).where(eq(bookingDispatchesTable.id, dispatch.id));
-  await db.update(bookingDispatchesTable).set({ status: "cancelled" }).where(
-    and(eq(bookingDispatchesTable.bookingId, params.data.id), ne(bookingDispatchesTable.id, dispatch.id), eq(bookingDispatchesTable.status, "pending"))
-  );
+    // Atomic claim: only ONE cleaner can flip the booking from "searching" → "accepted".
+    const [updated] = await tx.update(bookingsTable)
+      .set({ status: "accepted", cleanerId: cleaner.id, serviceOtp: otp })
+      .where(and(eq(bookingsTable.id, params.data.id), eq(bookingsTable.status, "searching")))
+      .returning();
+    if (!updated) return { kind: "taken" as const };
+
+    // Won the race — finalize dispatch rows.
+    await tx.update(bookingDispatchesTable).set({ status: "accepted" }).where(eq(bookingDispatchesTable.id, dispatch.id));
+    await tx.update(bookingDispatchesTable).set({ status: "cancelled" }).where(
+      and(eq(bookingDispatchesTable.bookingId, params.data.id), ne(bookingDispatchesTable.id, dispatch.id), eq(bookingDispatchesTable.status, "pending"))
+    );
+    return { kind: "ok" as const, booking: updated };
+  });
+
+  if (outcome.kind === "active_job") { res.status(409).json({ error: "active_job_exists", message: "Finish your current job before accepting a new one." }); return; }
+  if (outcome.kind === "not_dispatched") { res.status(403).json({ error: "Not dispatched to you or already handled" }); return; }
+  if (outcome.kind === "taken") { res.status(409).json({ error: "Booking already taken or not available" }); return; }
+
+  // Stop the search loop now that the booking is claimed.
   cancelRetry(params.data.id);
 
-  const enriched  = await enrichBooking(updated);
+  const enriched  = await enrichBooking(outcome.booking);
 
   if (enriched._customerPushToken) {
-    await sendPush([enriched._customerPushToken], "🧹 Cleaner Accepted Your Booking!", `${enriched.cleanerName} is on the way. Get ready!`, { type: "booking_accepted", bookingId: updated.id });
+    await sendPush([enriched._customerPushToken], "🧹 Cleaner Accepted Your Booking!", `${enriched.cleanerName} is on the way. Get ready!`, { type: "booking_accepted", bookingId: outcome.booking.id });
   }
 
   res.json(GetBookingResponse.parse(enriched));

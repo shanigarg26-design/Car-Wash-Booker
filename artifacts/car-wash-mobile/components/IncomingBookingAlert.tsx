@@ -51,11 +51,12 @@ interface Props {
   bookings: Booking[];
   takenByOtherBookings?: Booking[];  // bookings accepted by another cleaner — show "taken" notice
   pendingIds: Set<number>;
+  accepting?: boolean;               // an accept is in flight — lock every Accept button
   onAccept: (id: number) => void;
   onDecline: (id: number) => void;
 }
 
-export default function IncomingBookingAlert({ bookings, takenByOtherBookings = [], pendingIds, onAccept, onDecline }: Props) {
+export default function IncomingBookingAlert({ bookings, takenByOtherBookings = [], pendingIds, accepting = false, onAccept, onDecline }: Props) {
   const visible = bookings.length > 0 || takenByOtherBookings.length > 0;
   const slideAnim = useRef(new Animated.Value(600)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -170,6 +171,7 @@ export default function IncomingBookingAlert({ bookings, takenByOtherBookings = 
                 booking={b}
                 index={idx}
                 isPending={pendingIds.has(b.id)}
+                accepting={accepting}
                 onAccept={() => onAccept(b.id)}
                 onDecline={() => onDecline(b.id)}
               />
@@ -207,9 +209,12 @@ function TakenCard({ booking: b }: { booking: Booking }) {
 }
 
 function BookingCard({
-  booking: b, index, isPending, onAccept, onDecline,
-}: { booking: Booking; index: number; isPending: boolean; onAccept: () => void; onDecline: () => void }) {
+  booking: b, index, isPending, accepting, onAccept, onDecline,
+}: { booking: Booking; index: number; isPending: boolean; accepting: boolean; onAccept: () => void; onDecline: () => void }) {
   const enterAnim = useRef(new Animated.Value(0)).current;
+  // While any accept is in flight, lock this card's buttons too — but keep the
+  // spinner on the specific card being accepted.
+  const locked = isPending || accepting;
 
   useEffect(() => {
     Animated.spring(enterAnim, {
@@ -299,7 +304,7 @@ function BookingCard({
         <TouchableOpacity
           style={[styles.btn, styles.declineBtn]}
           onPress={onDecline}
-          disabled={isPending}
+          disabled={locked}
           activeOpacity={0.75}
         >
           <AppIcon name="x" size={20} color="#FFF" />
@@ -307,9 +312,9 @@ function BookingCard({
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.btn, styles.acceptBtn]}
+          style={[styles.btn, styles.acceptBtn, locked && { opacity: 0.6 }]}
           onPress={onAccept}
-          disabled={isPending}
+          disabled={locked}
           activeOpacity={0.75}
         >
           {isPending ? (
