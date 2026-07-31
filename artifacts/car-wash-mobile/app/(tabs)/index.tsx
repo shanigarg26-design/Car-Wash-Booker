@@ -236,7 +236,9 @@ function CleanerDashboard() {
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ['cleanerProfile'],
     queryFn: () => apiFetch('/api/cleaners/me'),
-    retry: false,
+    // Retry transient failures (cold-start timeout / network / 5xx) so the
+    // dashboard recovers on its own, but don't hammer on a real 4xx.
+    retry: (failureCount, err: any) => failureCount < 3 && ![400, 401, 403, 404].includes(err?.status),
   });
 
   const { data: bookings, isLoading: bookingsLoading, refetch } = useQuery({

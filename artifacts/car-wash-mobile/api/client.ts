@@ -13,12 +13,37 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch(path: string, options: RequestInit = {}) {
-  const res = await fetch(BASE_URL + path, {
-    ...options,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-  });
+export async function apiFetch(
+  path: string,
+  options: RequestInit & { timeoutMs?: number } = {},
+) {
+  // Always bound a request in time. Without this, a hung socket — common on the
+  // first request while the (free-tier) server cold-starts — never settles, and
+  // any screen waiting on it (auth check, dashboards) spins forever.
+  const { timeoutMs = 20000, signal: callerSignal, ...rest } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', () => controller.abort());
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(BASE_URL + path, {
+      ...rest,
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...rest.headers },
+      signal: controller.signal,
+    });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new ApiError('The request timed out. Please try again.', 'timeout', 0);
+    }
+    throw new ApiError('Network request failed. Please check your connection.', 'network_error', 0);
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     let message = 'An error occurred';
