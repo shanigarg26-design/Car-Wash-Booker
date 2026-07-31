@@ -112,7 +112,15 @@ export default function PackagesScreen() {
         ? 'Your requested washer will get the request at the daily time. If he doesn’t accept, you can auto-assign or pick another.'
         : 'Your first wash request goes out at the daily time. Whoever accepts becomes your washer for the whole package.');
     },
-    onError: (e: any) => Alert.alert('Could not start package', e?.message || 'Please try again.'),
+    onError: (e: any) => {
+      // Washer got booked (or changed his hours) between seeing the list and submitting —
+      // refresh the availability and drop the stale selection so the owner can re-pick.
+      if (e?.code === 'washer_just_booked' || e?.code === 'washer_unavailable') {
+        queryClient.invalidateQueries({ queryKey: ['prevWashers'] });
+        setPreferredCleanerId(null);
+      }
+      Alert.alert('Could not start package', e?.message || 'Please try again.');
+    },
   });
 
   const autoAssign = useMutation({

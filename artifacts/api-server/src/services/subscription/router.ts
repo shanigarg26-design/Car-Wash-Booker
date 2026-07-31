@@ -296,6 +296,25 @@ router.post("/subscriptions/daily", async (req, res): Promise<void> => {
     const [prior] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
       .where(and(eq(bookingsTable.customerId, userId), eq(bookingsTable.cleanerId, cid), eq(bookingsTable.status, "completed")));
     if (!prior) { res.status(400).json({ error: "not_previous_washer", message: "You can only request a washer who has cleaned your car before." }); return; }
+
+    // Re-check the chosen slot is still open for him — the availability list is a
+    // snapshot, so he may have been booked between the owner seeing it and submitting.
+    const slot = minutesToSlot(dailyMinutes);
+    const avail = safeParseSlots(c.availableSlots);
+    if (slot < 0 || (avail.length > 0 && !avail.includes(slot))) {
+      res.status(409).json({ error: "washer_unavailable", message: "This washer isn’t available at that time anymore. Please pick another time or washer." }); return;
+    }
+    const occ = new Set<number>();
+    const pk = await db.select({ dailyMinutes: subscriptionsTable.dailyMinutes }).from(subscriptionsTable)
+      .where(and(eq(subscriptionsTable.cleanerId, cid), eq(subscriptionsTable.kind, "daily"), eq(subscriptionsTable.status, "active")));
+    for (const p of pk) if (p.dailyMinutes != null) occ.add(minutesToSlot(p.dailyMinutes));
+    const bk = await db.select({ scheduledAt: bookingsTable.scheduledAt }).from(bookingsTable)
+      .where(and(eq(bookingsTable.cleanerId, cid), inArray(bookingsTable.status, ["scheduled", "accepted", "arrived"]), gte(bookingsTable.scheduledAt, new Date())));
+    for (const bb of bk) occ.add(dateToIstSlot(bb.scheduledAt));
+    if (occ.has(slot)) {
+      res.status(409).json({ error: "washer_just_booked", message: "This washer just got booked for that time. Please pick another time or washer." }); return;
+    }
+
     preferredCleanerId = c.id;
     preferredRate = c.pricePerClean;
   }
