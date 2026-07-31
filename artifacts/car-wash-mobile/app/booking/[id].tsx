@@ -417,7 +417,7 @@ export default function BookingDetailScreen() {
             <View style={{ backgroundColor: Colors.dark.card, borderRadius: 16, padding: 28, alignItems: 'center', gap: 12 }}>
               <ActivityIndicator color={Colors.dark.tint} size="large" />
               <Text style={{ color: Colors.dark.text, fontSize: 15, fontWeight: '600' }}>Moving your location…</Text>
-              <Text style={{ color: Colors.dark.subtext, fontSize: 12, textAlign: 'center' }}>Searching for nearby cleaners</Text>
+              <Text style={{ color: Colors.dark.tabIconDefault, fontSize: 12, textAlign: 'center' }}>Searching for nearby cleaners</Text>
             </View>
           </View>
         )}

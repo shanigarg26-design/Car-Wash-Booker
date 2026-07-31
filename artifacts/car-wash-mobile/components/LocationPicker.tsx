@@ -25,9 +25,7 @@ interface LocationPickerProps {
 
 const DEFAULT_LAT = 20.5937;
 const DEFAULT_LNG = 78.9629;
-const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
-  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
-  : '';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
 function buildMapHtml(lat: number, lng: number, apiBase: string): string {
   return `<!DOCTYPE html>

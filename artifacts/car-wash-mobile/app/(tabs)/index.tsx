@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Switch, RefreshControl, Animated, Easing, Platform,
+  ActivityIndicator, Alert, Switch, RefreshControl, Animated, Easing, Platform, Modal,
 } from 'react-native';
 import { useAuth } from '@/context/AuthContext';
 import Colors from '@/constants/colors';
@@ -13,6 +13,7 @@ import AppIcon from '@/components/AppIcon';
 import { useRouter } from 'expo-router';
 import { useWasherLocation } from '@/hooks/useWasherLocation';
 import IncomingBookingAlert from '@/components/IncomingBookingAlert';
+import CurrentLocationMap from '@/components/CurrentLocationMap';
 
 function getStatusColor(status: string) {
   switch (status) {
@@ -221,8 +222,11 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
 function CleanerDashboard() {
   const queryClient = useQueryClient();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
   const [cleanerCoords, setCleanerCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [showLocationMap, setShowLocationMap] = useState(false);
+  const [locatingForMap, setLocatingForMap] = useState(false);
 
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ['cleanerProfile'],
@@ -364,6 +368,42 @@ function CleanerDashboard() {
     );
   };
 
+  // Open the read-only informational map at the cleaner's current location.
+  // Uses the coords we already track; if not available yet, fetch a fresh fix.
+  const handleViewLocation = async () => {
+    if (cleanerCoords) { setShowLocationMap(true); return; }
+    if (Platform.OS === 'web') {
+      Alert.alert('Location unavailable', 'Could not determine your current location.');
+      return;
+    }
+    let ExpoLocation: typeof import('expo-location') | null = null;
+    try { ExpoLocation = require('expo-location'); } catch { ExpoLocation = null; }
+    if (!ExpoLocation) {
+      Alert.alert('Location unavailable', 'Could not determine your current location.');
+      return;
+    }
+    try {
+      setLocatingForMap(true);
+      const perm = await ExpoLocation.getForegroundPermissionsAsync();
+      let granted = perm.status === 'granted';
+      if (!granted) {
+        const req = await ExpoLocation.requestForegroundPermissionsAsync();
+        granted = req.status === 'granted';
+      }
+      if (!granted) {
+        Alert.alert('Location needed', 'Enable location access to see your position on the map.');
+        return;
+      }
+      const { coords } = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Balanced });
+      setCleanerCoords({ lat: coords.latitude, lng: coords.longitude });
+      setShowLocationMap(true);
+    } catch {
+      Alert.alert('Location unavailable', 'Could not determine your current location. Please try again.');
+    } finally {
+      setLocatingForMap(false);
+    }
+  };
+
   if (profileLoading) return <ActivityIndicator style={{ marginTop: 60 }} color={Colors.dark.tint} />;
 
   return (
@@ -391,6 +431,15 @@ function CleanerDashboard() {
               <Text style={styles.locationWarnText}>Location is off — tap to enable (required to receive bookings)</Text>
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.viewMapRow} onPress={handleViewLocation} activeOpacity={0.7} disabled={locatingForMap}>
+            {locatingForMap
+              ? <ActivityIndicator size="small" color={Colors.dark.tint} />
+              : <AppIcon name="map-pin" size={14} color={Colors.dark.tint} />}
+            <Text style={styles.viewMapText}>
+              {locatingForMap ? 'Getting your location…' : 'View my location on the map'}
+            </Text>
+            {!locatingForMap && <AppIcon name="chevron-right" size={14} color={Colors.dark.tint} />}
+          </TouchableOpacity>
         </View>
         <Switch
           value={profile?.available ?? false}
@@ -505,6 +554,32 @@ function CleanerDashboard() {
       onAccept={(id) => handleStatus.mutate({ id, action: 'accept' })}
       onDecline={(id) => handleStatus.mutate({ id, action: 'decline' })}
     />
+
+    {/* Read-only informational map of the cleaner's current location */}
+    <Modal
+      visible={showLocationMap}
+      animationType="slide"
+      onRequestClose={() => setShowLocationMap(false)}
+    >
+      <View style={styles.locMapRoot}>
+        <View style={[styles.locMapHeader, { paddingTop: (insets.top || 24) + 10 }]}>
+          <TouchableOpacity
+            onPress={() => setShowLocationMap(false)}
+            style={styles.locMapBackBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <AppIcon name="arrow-left" size={22} color={Colors.dark.text} />
+          </TouchableOpacity>
+          <Text style={styles.locMapTitle}>My Location</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={{ flex: 1 }}>
+          {cleanerCoords && (
+            <CurrentLocationMap latitude={cleanerCoords.lat} longitude={cleanerCoords.lng} />
+          )}
+        </View>
+      </View>
+    </Modal>
     </>
   );
 }
@@ -790,6 +865,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10,
   },
   locationWarnText: { color: '#F87171', fontSize: 12, flex: 1 },
+  viewMapRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12,
+    alignSelf: 'flex-start',
+  },
+  viewMapText: { color: Colors.dark.tint, fontSize: 13, fontWeight: '600' },
+  locMapRoot: { flex: 1, backgroundColor: Colors.dark.background },
+  locMapHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 14,
+    borderBottomWidth: 1, borderBottomColor: Colors.dark.border,
+  },
+  locMapBackBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  locMapTitle: { fontSize: 17, fontWeight: '700', color: Colors.dark.text },
   packagePromo: {
     flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20,
     backgroundColor: Colors.dark.success + '12', borderRadius: 16, padding: 16,
