@@ -7,6 +7,7 @@
  */
 import { Router, type IRouter } from "express";
 import { sweepStaleBookings } from "../booking/dispatcher.js";
+import { runPackageBillingSweep } from "../subscription/billing.js";
 
 const router: IRouter = Router();
 
@@ -20,7 +21,8 @@ router.post("/internal/sweep", async (req, res): Promise<void> => {
 
   try {
     const result = await sweepStaleBookings();
-    res.json({ ok: true, ...result });
+    const billing = await runPackageBillingSweep();
+    res.json({ ok: true, ...result, billing });
   } catch (err) {
     console.error("[Sweep] error:", err);
     res.status(500).json({ error: "sweep_failed" });

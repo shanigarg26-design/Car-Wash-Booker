@@ -7,4 +7,5 @@ export * from "./otps";
 export * from "./feedback";
 export * from "./avatars";
 export * from "./subscriptions";
+export * from "./package-bills";
 export * from "./messages";

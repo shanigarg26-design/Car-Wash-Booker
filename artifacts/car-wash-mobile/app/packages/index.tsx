@@ -168,6 +168,21 @@ export default function PackagesScreen() {
               )}
               <Text style={styles.endLine}>Ends {new Date(s.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} · billed weekly, offline</Text>
 
+              {(s.bills ?? []).length > 0 && (
+                <View style={styles.billsBox}>
+                  {s.bills.map((bill: any) => (
+                    <View key={bill.id} style={styles.billRow}>
+                      <Text style={styles.billWeek}>Week {bill.weekIndex + 1}</Text>
+                      <Text style={styles.billAmt}>₹{bill.amountDue} · {bill.washesCount} wash{bill.washesCount > 1 ? 'es' : ''}</Text>
+                      {bill.status === 'paid'
+                        ? <Text style={styles.billPaid}>Paid ✓</Text>
+                        : <Text style={styles.billDue}>Pay washer</Text>}
+                    </View>
+                  ))}
+                  {s.amountDue > 0 && <Text style={styles.billTotal}>₹{s.amountDue} outstanding — pay your washer directly.</Text>}
+                </View>
+              )}
+
               <TouchableOpacity style={styles.manageRow} onPress={() => setExpanded(isOpen ? null : s.id)}>
                 <Text style={styles.manageText}>{isOpen ? 'Hide days' : 'Manage days'}</Text>
                 <AppIcon name={isOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.dark.tint} />
@@ -296,6 +311,13 @@ const styles = StyleSheet.create({
   progressText: { color: Colors.dark.tint, fontWeight: '800', fontSize: 13 },
   nextLine: { color: Colors.dark.text, fontSize: 13, marginTop: 10 },
   endLine: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 4 },
+  billsBox: { marginTop: 12, backgroundColor: Colors.dark.background, borderRadius: 10, padding: 10, gap: 6 },
+  billRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  billWeek: { color: Colors.dark.text, fontSize: 13, fontWeight: '600', width: 60 },
+  billAmt: { color: Colors.dark.tabIconDefault, fontSize: 13, flex: 1 },
+  billPaid: { color: Colors.dark.success, fontSize: 13, fontWeight: '700' },
+  billDue: { color: '#FBBF24', fontSize: 13, fontWeight: '700' },
+  billTotal: { color: '#FBBF24', fontSize: 12, marginTop: 2 },
   manageRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12 },
   manageText: { color: Colors.dark.tint, fontWeight: '600', fontSize: 13 },
   dayList: { marginTop: 10, borderTopWidth: 1, borderTopColor: Colors.dark.border, paddingTop: 8 },

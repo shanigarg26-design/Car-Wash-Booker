@@ -4,7 +4,7 @@
  * duration) and tracks a customer's active package.
  */
 import { Router, type IRouter } from "express";
-import { db, subscriptionsTable, usersTable, bookingsTable, cleanersTable } from "@workspace/db";
+import { db, subscriptionsTable, usersTable, bookingsTable, cleanersTable, packageBillsTable } from "@workspace/db";
 import { eq, and, gt, inArray } from "drizzle-orm";
 import { PACKAGES, priceForPackage } from "../booking/service.js";
 import { sendPush } from "../../shared/push.js";
@@ -87,11 +87,21 @@ async function enrichPackage(s: typeof subscriptionsTable.$inferSelect) {
   }
   const [cust] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, s.customerId));
 
+  const bills = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, s.id));
+  bills.sort((a, b) => a.weekIndex - b.weekIndex);
+
   return {
     ...base,
     cleanerName, customerName: cust?.name ?? null,
     daysCompleted: days.filter(d => d.status === "completed").length,
     days: days.map(d => ({ ...d, scheduledAt: d.scheduledAt.toISOString() })),
+    bills: bills.map(b => ({
+      id: b.id, weekIndex: b.weekIndex, washesCount: b.washesCount, amountDue: b.amountDue,
+      status: b.status,
+      weekStart: b.weekStart.toISOString(), weekEnd: b.weekEnd.toISOString(),
+      dueDate: b.dueDate.toISOString(), paidAt: b.paidAt ? b.paidAt.toISOString() : null,
+    })),
+    amountDue: bills.filter(b => b.status === "due").reduce((sum, b) => sum + b.amountDue, 0),
   };
 }
 
@@ -294,6 +304,30 @@ router.patch("/subscriptions/:id/skip-day", async (req, res): Promise<void> => {
   }
 
   res.json({ ok: true, extendedTo: newEnd.toISOString() });
+});
+
+// PATCH /api/subscriptions/:id/bills/:billId/paid — the bound washer confirms he was
+// paid (offline) for a weekly bill. The owner then sees it marked Paid.
+router.patch("/subscriptions/:id/bills/:billId/paid", async (req, res): Promise<void> => {
+  const userId = (req.session as Record<string, unknown>).userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+  const id = parseInt(req.params.id, 10);
+  const billId = parseInt(req.params.billId, 10);
+  if (isNaN(id) || isNaN(billId)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, id));
+  if (!sub) { res.status(404).json({ error: "Package not found" }); return; }
+  const [cleaner] = await db.select().from(cleanersTable).where(eq(cleanersTable.userId, userId));
+  if (!cleaner || sub.cleanerId !== cleaner.id) { res.status(403).json({ error: "Only the assigned washer can confirm payment" }); return; }
+
+  const [bill] = await db.select().from(packageBillsTable)
+    .where(and(eq(packageBillsTable.id, billId), eq(packageBillsTable.subscriptionId, id)));
+  if (!bill) { res.status(404).json({ error: "Bill not found" }); return; }
+  if (bill.status === "paid") { res.json({ ok: true, alreadyPaid: true }); return; }
+
+  await db.update(packageBillsTable).set({ status: "paid", paidAt: new Date() }).where(eq(packageBillsTable.id, billId));
+  await pushToUser(sub.customerId, "Payment confirmed ✓", `Your washer confirmed ₹${bill.amountDue} received for week ${bill.weekIndex + 1}.`, { type: "package_bill_paid", subscriptionId: id });
+  res.json({ ok: true });
 });
 
 /**

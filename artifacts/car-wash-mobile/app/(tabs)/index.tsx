@@ -15,6 +15,7 @@ import { useWasherLocation } from '@/hooks/useWasherLocation';
 import IncomingBookingAlert from '@/components/IncomingBookingAlert';
 import CurrentLocationMap from '@/components/CurrentLocationMap';
 import AvailabilityManager from '@/components/AvailabilityManager';
+import WasherPackages from '@/components/WasherPackages';
 
 // Current half-hour slot index in IST (India). 0 = 06:00 … 23 = 17:30; -1 outside 6am–6pm.
 function currentIstSlot(): number {
@@ -540,6 +541,9 @@ function CleanerDashboard() {
           </View>
         </View>
       )}
+
+      {/* Daily packages this washer serves — bills + payment confirmation */}
+      <WasherPackages />
 
       {/* Upcoming scheduled bookings — where & when to go next */}
       {scheduledJobs.length > 0 && (
