@@ -327,6 +327,11 @@ function CleanerDashboard() {
     }),
     // Silent — switching the toggle off must never pop a warning/confirmation.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cleanerProfile'] }),
+    onError: (e: any) => {
+      // Can't go online while in a booking — tell him; otherwise stay silent.
+      if (e?.code === 'in_booking') Alert.alert('You’re in a booking', e?.message || 'Finish or cancel your current booking to go online.');
+      queryClient.invalidateQueries({ queryKey: ['cleanerProfile'] }); // snap the switch back
+    },
   });
 
   // Working-hours slots (6AM–6PM IST, 24 half-hour slots).

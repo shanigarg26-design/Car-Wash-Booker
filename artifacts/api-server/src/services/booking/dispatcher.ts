@@ -67,7 +67,7 @@ export async function dispatchToSpecificCleaner(
  * ('unassigned') until the owner chooses auto-assign or another washer.
  */
 export async function pausePackageForOwnerChoice(
-  pkg: { id: number; customerId: number }, bookingId: number, reason: "declined" | "offline",
+  pkg: { id: number; customerId: number }, bookingId: number, reason: "declined" | "offline" | "unavailable",
 ): Promise<void> {
   await db.update(bookingsTable).set({ status: "scheduled", cleanerId: null }).where(eq(bookingsTable.id, bookingId));
   await db.update(bookingDispatchesTable).set({ status: "cancelled" })
@@ -75,10 +75,11 @@ export async function pausePackageForOwnerChoice(
   await db.update(subscriptionsTable).set({ status: "unassigned" }).where(eq(subscriptionsTable.id, pkg.id));
   const [cust] = await db.select({ token: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, pkg.customerId));
   if (cust?.token) {
+    const why = reason === "declined" ? "declined"
+      : reason === "unavailable" ? "isn’t free for that time"
+      : "went offline";
     await sendPush([cust.token], "Washer didn't accept",
-      reason === "offline"
-        ? "Your requested washer went offline. Choose auto-assign or pick another washer."
-        : "Your requested washer declined. Choose auto-assign or pick another washer.",
+      `Your requested washer ${why}. Choose auto-assign or pick another washer.`,
       { type: "package_needs_owner", subscriptionId: pkg.id });
   }
 }
@@ -133,7 +134,20 @@ export async function dispatchToNearestCleaners(
   excludeCleanerIds: number[] = [],
   maxCount           = MAX_DISPATCH,
   notification?:     DispatchNotificationPayload,
+  // Scheduled/package bookings reach washers whose SLOT is marked available for that
+  // time even if their live online toggle is OFF — they said they work that slot, so
+  // the request should still find them (they get a push and can open the app). Instant
+  // bookings keep requiring the washer to be online right now.
+  includeOffline     = false,
 ): Promise<number> {
+  // Online gating applies only to instant bookings.
+  const onlineConds = includeOffline ? [] : [
+    eq(cleanersTable.available, true),
+    eq(usersTable.isLoggedIn, true),
+    // Only cleaners whose app checked in recently — excludes "phantom online"
+    // accounts whose phone is off / app was force-quit.
+    gte(usersTable.lastSeenAt, new Date(Date.now() - ONLINE_STALE_MS)),
+  ];
   const allCleaners = await db
     .select({
       id:        cleanersTable.id,
@@ -145,13 +159,7 @@ export async function dispatchToNearestCleaners(
     })
     .from(cleanersTable)
     .leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
-    .where(and(
-      eq(cleanersTable.available, true),
-      eq(usersTable.isLoggedIn, true),
-      // Only cleaners whose app checked in recently — excludes "phantom online"
-      // accounts whose phone is off / app was force-quit.
-      gte(usersTable.lastSeenAt, new Date(Date.now() - ONLINE_STALE_MS)),
-    ));
+    .where(onlineConds.length ? and(...onlineConds) : undefined);
 
   // Exclude cleaners who already have a job in progress — no point dispatching to
   // someone who can't accept (they'd just get spammed and the customer would wait).
@@ -236,6 +244,7 @@ export function scheduleSearchRetry(
   address:     string,
   price:       number,
   startedAt:   number,
+  includeOffline = false,
 ): void {
   const elapsed = Date.now() - startedAt;
 
@@ -268,6 +277,7 @@ export function scheduleSearchRetry(
         dispatches.map(d => d.cleanerId),
         MAX_DISPATCH,
         { vehicleType, cleanType, address, price },
+        includeOffline,
       );
 
       const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
@@ -275,7 +285,7 @@ export function scheduleSearchRetry(
 
       scheduleSearchRetry(
         bookingId, customerLat, customerLng,
-        vehicleType, cleanType, address, price, startedAt,
+        vehicleType, cleanType, address, price, startedAt, includeOffline,
       );
     } catch (err) {
       console.error(`[Dispatch] Retry error for booking ${bookingId}:`, err);
@@ -341,16 +351,16 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
       // Assignment day, not bound yet.
       if (pkg.preferredCleanerId != null) {
         // Owner requested a specific previous washer → send ONLY to him (no broadcast).
-        const [pref] = await db.select({
-          available: cleanersTable.available, isLoggedIn: usersTable.isLoggedIn, lastSeenAt: usersTable.lastSeenAt,
-        }).from(cleanersTable).leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
-          .where(eq(cleanersTable.id, pkg.preferredCleanerId));
-        const online = !!(pref?.available && pref.isLoggedIn && pref.lastSeenAt && Date.now() - pref.lastSeenAt.getTime() < ONLINE_STALE_MS);
-        const [busyPref] = online
-          ? await db.select({ id: bookingsTable.id }).from(bookingsTable)
-              .where(and(eq(bookingsTable.cleanerId, pkg.preferredCleanerId), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])))
-          : [undefined];
-        if (online && !busyPref) {
+        // Scheduled requests reach him by his SLOT, not his online toggle: send it even
+        // if he's toggled off, as long as the slot is his and he's not already busy.
+        // He then accepts or rejects.
+        const [pref] = await db.select({ slots: cleanersTable.availableSlots })
+          .from(cleanersTable).where(eq(cleanersTable.id, pkg.preferredCleanerId));
+        const bookingSlot = currentIstSlot(b.scheduledAt);
+        const slotOk = worksThisSlot(pref?.slots ?? null, bookingSlot);
+        const [busyPref] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+          .where(and(eq(bookingsTable.cleanerId, pkg.preferredCleanerId), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])));
+        if (slotOk && !busyPref) {
           const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
             .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
           if (promoted) {
@@ -360,8 +370,8 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
             console.log(`[Sweep] Package ${pkg.id} day ${b.id} sent to requested washer ${pkg.preferredCleanerId}`);
           }
         } else {
-          // Requested washer offline/busy → hand back to the owner to choose.
-          await pausePackageForOwnerChoice(pkg, b.id, "offline");
+          // He's not free for that slot (already booked) → hand back to the owner.
+          await pausePackageForOwnerChoice(pkg, b.id, "unavailable");
         }
         continue;
       }
@@ -372,16 +382,22 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
     const [promoted] = await db.update(bookingsTable).set({ status: "searching" })
       .where(and(eq(bookingsTable.id, b.id), eq(bookingsTable.status, "scheduled"))).returning();
     if (!promoted) continue;
+    // Scheduled bookings reach in-range washers whose slot is marked available even if
+    // their toggle is off (includeOffline). The online toggle only gates instant bookings.
     await dispatchToNearestCleaners(b.id, b.customerLat, b.customerLng, [], MAX_DISPATCH,
-      { vehicleType: b.vehicleType, cleanType: b.cleanType ?? "exterior", address: b.customerAddress, price: b.priceQuoted });
-    scheduleSearchRetry(b.id, b.customerLat, b.customerLng, b.vehicleType, b.cleanType ?? "exterior", b.customerAddress, b.priceQuoted, now);
+      { vehicleType: b.vehicleType, cleanType: b.cleanType ?? "exterior", address: b.customerAddress, price: b.priceQuoted }, true);
+    scheduleSearchRetry(b.id, b.customerLat, b.customerLng, b.vehicleType, b.cleanType ?? "exterior", b.customerAddress, b.priceQuoted, now, true);
     promotedScheduled++;
     console.log(`[Sweep] Scheduled booking ${b.id} promoted to searching`);
   }
 
   // 1) Expire overdue "searching" bookings
+  // Measure the search window from scheduledAt, not createdAt: a scheduled/package day
+  // is created long before it starts searching (at its scheduled time), so createdAt
+  // would make it look stale the instant it's promoted. For instant bookings
+  // scheduledAt == creation time, so behaviour is unchanged.
   const staleSearching = await db.select().from(bookingsTable).where(
-    and(eq(bookingsTable.status, "searching"), lt(bookingsTable.createdAt, new Date(now - MAX_SEARCH_DURATION_MS))),
+    and(eq(bookingsTable.status, "searching"), lt(bookingsTable.scheduledAt, new Date(now - MAX_SEARCH_DURATION_MS))),
   );
   for (const b of staleSearching) {
     cancelRetry(b.id);

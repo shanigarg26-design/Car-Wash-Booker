@@ -3,8 +3,8 @@
  * CRUD for cleaner profiles, availability toggling, and admin-style listing.
  */
 import { Router, type IRouter } from "express";
-import { db, cleanersTable, usersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, cleanersTable, usersTable, bookingsTable } from "@workspace/db";
+import { eq, and, inArray } from "drizzle-orm";
 import {
   CreateWasherBody,
   UpdateMyWasherProfileBody,
@@ -74,6 +74,21 @@ router.patch("/cleaners/me", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   if (!(await ensureCleanerProfile(userId))) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
+
+  // A washer already in a booking can't go online — being online is only for taking
+  // NEW instant work, and he's busy with the current job/slot. He must finish or cancel
+  // it first. (The toggle stays off during a scheduled booking for the same reason.)
+  if (parsed.data.available === true) {
+    const [me] = await db.select({ id: cleanersTable.id }).from(cleanersTable).where(eq(cleanersTable.userId, userId));
+    if (me) {
+      const [activeJob] = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+        .where(and(eq(bookingsTable.cleanerId, me.id), inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"])));
+      if (activeJob) {
+        res.status(409).json({ error: "in_booking", message: "You already have a booking for this slot. Cancel it to go online, or continue with the existing booking." });
+        return;
+      }
+    }
+  }
 
   const updateData: Record<string, unknown> = {};
   if (parsed.data.phone        != null) updateData.phone        = parsed.data.phone;

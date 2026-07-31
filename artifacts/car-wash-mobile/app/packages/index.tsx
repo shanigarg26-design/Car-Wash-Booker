@@ -182,10 +182,10 @@ export default function PackagesScreen() {
                     <Text style={styles.autoAssignText}>Auto-assign</Text>
                   </TouchableOpacity>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
-                    {previousWashers.filter((w: any) => w.online && w.cleanerId !== s.preferredCleanerId).map((w: any) => (
+                    {previousWashers.filter((w: any) => w.cleanerId !== s.preferredCleanerId).map((w: any) => (
                       <TouchableOpacity key={w.cleanerId} style={styles.reassignChip} onPress={() => reassign.mutate({ id: s.id, cleanerId: w.cleanerId })}>
                         <Text style={styles.reassignName}>{w.name}</Text>
-                        <Text style={styles.reassignOnline}>● Online</Text>
+                        <Text style={[styles.reassignOnline, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>{w.online ? '● Online' : '○ Offline'}</Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -323,36 +323,37 @@ export default function PackagesScreen() {
           const isSel = preferredCleanerId === w.cleanerId;
           const freeMins = (w.slots ?? []).map((s: number) => 360 + s * 30);
           return (
-            <View key={w.cleanerId} style={[styles.washerCard, isSel && styles.washerCardActive, !w.online && styles.washerCardOff]}>
+            <View key={w.cleanerId} style={[styles.washerCard, isSel && styles.washerCardActive]}>
               <View style={styles.washerCardHead}>
                 <Text style={styles.washerCardName}>{w.name}</Text>
                 <Text style={[styles.washerCardMeta, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>
-                  {w.online ? '● Online' : 'Offline'}{w.pricePerWash ? ` · ₹${w.pricePerWash}/wash` : ''}
+                  {w.online ? '● Online' : '○ Offline'}{w.pricePerWash ? ` · ₹${w.pricePerWash}/wash` : ''}
                 </Text>
               </View>
-              {!w.online ? (
-                <Text style={styles.slotNote}>Offline — can’t be selected right now.</Text>
-              ) : freeMins.length === 0 ? (
-                <Text style={styles.slotNote}>No free time slots (fully booked or none set).</Text>
+              {freeMins.length === 0 ? (
+                <Text style={styles.slotNote}>No free slots for these days (fully booked).</Text>
               ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-                  {freeMins.map((m: number) => {
-                    const on = isSel && dailyMinutes === m;
-                    return (
-                      <TouchableOpacity key={m} style={[styles.slotChip, on && styles.chipActive]} onPress={() => { setPreferredCleanerId(w.cleanerId); setDailyMinutes(m); }}>
-                        <Text style={[styles.chipText, on && styles.chipTextActive]}>{minutesLabel(m)}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
+                <>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                    {freeMins.map((m: number) => {
+                      const on = isSel && dailyMinutes === m;
+                      return (
+                        <TouchableOpacity key={m} style={[styles.slotChip, on && styles.chipActive]} onPress={() => { setPreferredCleanerId(w.cleanerId); setDailyMinutes(m); }}>
+                          <Text style={[styles.chipText, on && styles.chipTextActive]}>{minutesLabel(m)}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                  {!w.online && <Text style={styles.slotNote}>Offline now — he’ll be notified and can accept or decline.</Text>}
+                </>
               )}
             </View>
           );
         })}
         <Text style={styles.pickerHint}>
           {preferredCleanerId
-            ? 'The request goes straight to this washer at the chosen time. If he doesn’t accept, you can auto-assign or pick another.'
-            : 'Auto-assign sends to whoever’s available at your chosen time. Pick a specific washer to lock him in — only slots he’s free for are shown.'}
+            ? 'The request goes straight to this washer at the chosen time. He can accept or decline (even if offline now); if he doesn’t, you can auto-assign or pick another.'
+            : 'These are your previous washers and the slots they’re free for. A washer’s availability comes from the slots he set — the online toggle only affects instant bookings.'}
         </Text>
 
         <Text style={styles.sectionLabel}>Service address</Text>
