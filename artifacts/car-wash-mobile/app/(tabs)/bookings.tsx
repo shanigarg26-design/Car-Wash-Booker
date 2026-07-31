@@ -10,12 +10,17 @@ import HomeButton from '@/components/HomeButton';
 import { useRouter } from 'expo-router';
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  searching: { label: 'Searching', color: Colors.dark.warning },
-  accepted:  { label: 'Accepted',  color: Colors.dark.success },
-  completed: { label: 'Completed', color: Colors.dark.tint },
-  cancelled: { label: 'Cancelled', color: Colors.dark.tabIconDefault },
-  declined:  { label: 'Declined',  color: Colors.dark.error },
+  searching:   { label: 'Searching',   color: Colors.dark.warning },
+  scheduled:   { label: 'Scheduled',   color: Colors.dark.warning },
+  accepted:    { label: 'Accepted',    color: Colors.dark.success },
+  arrived:     { label: 'Arrived',     color: '#7C3AED' },
+  in_progress: { label: 'In Progress', color: '#0891B2' },
+  completed:   { label: 'Completed',   color: Colors.dark.tint },
+  cancelled:   { label: 'Cancelled',   color: Colors.dark.tabIconDefault },
+  declined:    { label: 'Declined',    color: Colors.dark.error },
 };
+
+const ACTIVE_STATUSES = ['searching', 'scheduled', 'accepted', 'arrived', 'in_progress'];
 
 export default function BookingsScreen() {
   const { user } = useAuth();
@@ -37,21 +42,22 @@ export default function BookingsScreen() {
   });
 
   const filteredBookings = (bookings || []).filter((b: any) => {
-    if (filter === 'upcoming') return ['searching', 'accepted'].includes(b.status);
-    return ['completed', 'declined', 'cancelled'].includes(b.status);
+    if (filter === 'upcoming') return ACTIVE_STATUSES.includes(b.status);
+    return !ACTIVE_STATUSES.includes(b.status);
   });
 
   const renderBooking = ({ item }: { item: any }) => {
     const statusInfo = STATUS_MAP[item.status] || { label: item.status, color: Colors.dark.tabIconDefault };
     const counterpart = user?.role === 'customer'
       ? (item.washerName || item.cleanerName || (item.status === 'searching' ? 'Finding cleaner…' : null))
-      : item.customer?.name;
+      : item.customerName;
 
     const vehicleLabel = item.vehicleType
       ? `${item.vehicleType} · ${(item.cleanType ?? item.washType) === 'both' ? 'E + Interior' : 'Exterior Only'}`
       : null;
 
-    const priceLabel = item.price != null ? `₹${item.price}` : null;
+    const priceValue = item.amountCharged ?? item.priceQuoted;
+    const priceLabel = priceValue != null ? `₹${priceValue}` : null;
 
     return (
       <View style={styles.card}>

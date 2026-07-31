@@ -13,7 +13,8 @@ router.post("/feedback", async (req, res): Promise<void> => {
   if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
 
   const { bookingId, rating, comment } = req.body;
-  if (!bookingId || !rating || rating < 1 || rating > 5) {
+  const ratingNum = Number(rating);
+  if (!bookingId || !Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
     res.status(400).json({ error: "bookingId and rating (1-5) required" }); return;
   }
 
@@ -47,7 +48,7 @@ router.post("/feedback", async (req, res): Promise<void> => {
 
   const [created] = await db.insert(feedbackTable).values({
     bookingId: Number(bookingId), reviewerId: userId,
-    reviewerRole, rating: Number(rating), comment: comment || null,
+    reviewerRole, rating: ratingNum, comment: comment || null,
   }).returning();
 
   // When a CUSTOMER rates a cleaner, refresh that cleaner's average rating so it

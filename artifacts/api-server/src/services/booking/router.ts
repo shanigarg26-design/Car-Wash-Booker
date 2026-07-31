@@ -267,12 +267,39 @@ router.get("/bookings/:id/washer-location", async (req, res): Promise<void> => {
 
 // ── GET /api/bookings/:id ─────────────────────────────────────────────────────
 router.get("/bookings/:id", async (req, res): Promise<void> => {
+  const session = req.session as unknown as Record<string, unknown>;
+  const userId  = session.userId as number | undefined;
+  if (!userId) { res.status(401).json({ error: "Not authenticated" }); return; }
+
   const rawId  = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = GetBookingParams.safeParse({ id: parseInt(rawId, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   const [booking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, params.data.id));
   if (!booking) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  // Only participants may view a booking — the response exposes the service OTP
+  // and the customer's phone, address and GPS coordinates. Allowed viewers:
+  // the owning customer, the assigned or dispatched cleaner, or an admin.
+  let allowed = booking.customerId === userId || session.isAdmin === true;
+  if (!allowed) {
+    const [cleaner] = await db.select({ id: cleanersTable.id })
+      .from(cleanersTable).where(eq(cleanersTable.userId, userId));
+    if (cleaner) {
+      if (booking.cleanerId === cleaner.id) {
+        allowed = true;
+      } else {
+        const [dispatch] = await db.select({ id: bookingDispatchesTable.id })
+          .from(bookingDispatchesTable)
+          .where(and(
+            eq(bookingDispatchesTable.bookingId, booking.id),
+            eq(bookingDispatchesTable.cleanerId, cleaner.id),
+          ));
+        if (dispatch) allowed = true;
+      }
+    }
+  }
+  if (!allowed) { res.status(403).json({ error: "Not authorized to view this booking" }); return; }
 
   res.json(GetBookingResponse.parse(await enrichBooking(booking)));
 });
@@ -736,6 +763,13 @@ router.patch("/bookings/:id/cancel", async (req, res): Promise<void> => {
   // Only the owning customer (or an admin) may cancel via this endpoint.
   if (existing.customerId !== userId && session.isAdmin !== true) {
     res.status(403).json({ error: "Not your booking" }); return;
+  }
+  // This endpoint is only for calling off a booking that is still searching or
+  // scheduled (before a cleaner is engaged). Once accepted/arrived/in-progress
+  // the customer must use /customer-cancel; completed/cancelled are terminal.
+  // Admins may override at any stage.
+  if (session.isAdmin !== true && !["searching", "scheduled"].includes(existing.status)) {
+    res.status(409).json({ error: "Booking cannot be cancelled at this stage" }); return;
   }
 
   // Stop the in-flight search loop so the old request stops re-dispatching.

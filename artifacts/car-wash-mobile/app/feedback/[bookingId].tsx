@@ -6,6 +6,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/api/client';
+import { useAuth } from '@/context/AuthContext';
 import Colors from '@/constants/colors';
 import AppIcon from '@/components/AppIcon';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,6 +35,7 @@ export default function FeedbackScreen() {
   const { bookingId } = useLocalSearchParams<{ bookingId: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
 
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
@@ -67,10 +69,13 @@ export default function FeedbackScreen() {
     return <View style={[styles.root, styles.center]}><ActivityIndicator color={Colors.dark.tint} size="large" /></View>;
   }
 
-  const alreadyReviewed = Array.isArray(existingFeedback) && existingFeedback.some((f: any) => true);
+  // Only treat as "already reviewed" if the CURRENT user left a review — the
+  // endpoint returns every party's reviews for this booking.
+  const myReview = Array.isArray(existingFeedback)
+    ? existingFeedback.find((f: any) => f.reviewerId === user?.id)
+    : undefined;
 
-  if (alreadyReviewed && existingFeedback.length > 0) {
-    const myReview = existingFeedback[0];
+  if (myReview) {
     return (
       <View style={[styles.root, { paddingTop: insets.top || 20 }]}>
         <View style={styles.header}>

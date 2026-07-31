@@ -79,9 +79,9 @@ export default function BookingHistoryScreen() {
 
   const renderCard = (item: any) => {
     const cfg = STATUS_CONFIG[item.status] ?? { label: item.status, color: Colors.dark.tabIconDefault, icon: 'circle' };
-    const counterpart = isWasher ? item.customer?.name : (item.washer?.user?.name ?? null);
+    const counterpart = isWasher ? item.customerName : (item.washerName ?? item.cleanerName ?? null);
     const vehicle = formatVehicle(item.vehicleType, item.washType);
-    const price = item.price ?? item.priceQuoted;
+    const price = item.amountCharged ?? item.priceQuoted;
 
     return (
       <TouchableOpacity

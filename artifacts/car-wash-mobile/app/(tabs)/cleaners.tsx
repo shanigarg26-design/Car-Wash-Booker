@@ -18,9 +18,8 @@ export default function CleanersScreen() {
     queryFn: () => apiFetch('/api/cleaners?available=true'),
   });
 
-  const filteredCleaners = cleaners?.filter((w: any) => 
-    w.user?.city?.toLowerCase().includes(search.toLowerCase()) ||
-    w.user?.name?.toLowerCase().includes(search.toLowerCase())
+  const filteredCleaners = cleaners?.filter((w: any) =>
+    (w.name ?? '').toLowerCase().includes(search.toLowerCase())
   ) || [];
 
   const renderCleaner = ({ item }: { item: any }) => (
@@ -30,12 +29,12 @@ export default function CleanersScreen() {
     >
       <View style={styles.cardHeader}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{item.user?.name?.[0]?.toUpperCase()}</Text>
+          <Text style={styles.avatarText}>{item.name?.[0]?.toUpperCase() ?? '?'}</Text>
         </View>
         <View style={styles.info}>
-          <Text style={styles.name}>{item.user?.name}</Text>
+          <Text style={styles.name}>{item.name || 'Cleaner'}</Text>
           <Text style={styles.city}>
-            <AppIcon name="map-pin" size={12} color={Colors.dark.tabIconDefault} /> {item.user?.city}
+            <AppIcon name="star" size={12} color={Colors.dark.tabIconDefault} /> {item.rating ? Number(item.rating).toFixed(1) : 'New'}
           </Text>
         </View>
         <View style={styles.priceTag}>
@@ -64,7 +63,7 @@ export default function CleanersScreen() {
           <AppIcon name="search" size={20} color={Colors.dark.tabIconDefault} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search by city or name..."
+            placeholder="Search by name..."
             placeholderTextColor={Colors.dark.tabIconDefault}
             value={search}
             onChangeText={setSearch}
