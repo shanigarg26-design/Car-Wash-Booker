@@ -585,6 +585,18 @@ function CleanerDashboard() {
         />
       </View>
 
+      {/* Mandatory working hours — no slots = no bookings at all */}
+      {!hasSchedule && (
+        <TouchableOpacity style={styles.slotsWarn} onPress={() => setShowSlots(true)} activeOpacity={0.85}>
+          <AppIcon name="alert-triangle" size={18} color="#FBBF24" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.slotsWarnTitle}>Set your working hours</Text>
+            <Text style={styles.slotsWarnSub}>You won’t receive any bookings — instant or scheduled — until you pick the slots you work.</Text>
+          </View>
+          <AppIcon name="chevron-right" size={16} color="#FBBF24" />
+        </TouchableOpacity>
+      )}
+
       {/* Incoming booking requests are handled by the full-screen IncomingBookingAlert overlay below */}
       {incomingRequests.length > 0 && (
         <View style={styles.incomingBanner}>
@@ -887,6 +899,9 @@ const styles = StyleSheet.create({
   pkgEntrySub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 3 },
   dueBadge: { backgroundColor: '#FBBF2422', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   dueBadgeText: { color: '#FBBF24', fontSize: 12, fontWeight: '700' },
+  slotsWarn: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FBBF2415', borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#FBBF2455' },
+  slotsWarnTitle: { color: '#FBBF24', fontSize: 14, fontWeight: '700' },
+  slotsWarnSub: { color: Colors.dark.tabIconDefault, fontSize: 12, marginTop: 3, lineHeight: 17 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',

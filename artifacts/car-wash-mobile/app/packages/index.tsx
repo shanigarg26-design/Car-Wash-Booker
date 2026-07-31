@@ -123,17 +123,6 @@ export default function PackagesScreen() {
     },
   });
 
-  const autoAssign = useMutation({
-    mutationFn: (id: number) => apiFetch(`/api/subscriptions/${id}/auto-assign`, { method: 'PATCH' }),
-    onSuccess: invalidate,
-    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not update.'),
-  });
-  const reassign = useMutation({
-    mutationFn: (v: { id: number; cleanerId: number }) => apiFetch(`/api/subscriptions/${v.id}/reassign`, { method: 'PATCH', body: JSON.stringify({ cleanerId: v.cleanerId }) }),
-    onSuccess: invalidate,
-    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not reassign.'),
-  });
-
   const cancelPackage = useMutation({
     mutationFn: (id: number) => apiFetch(`/api/subscriptions/${id}/cancel`, { method: 'PATCH' }),
     onSuccess: invalidate,
@@ -174,23 +163,6 @@ export default function PackagesScreen() {
           const now = Date.now();
           return (
             <View key={s.id} style={styles.pkgCard}>
-              {s.status === 'unassigned' && (
-                <View style={styles.unassignedBox}>
-                  <Text style={styles.unassignedTitle}>Requested washer didn’t accept</Text>
-                  <Text style={styles.unassignedSub}>Auto-assign to any available washer, or pick another you’ve used before:</Text>
-                  <TouchableOpacity style={styles.autoAssignBtn} onPress={() => autoAssign.mutate(s.id)}>
-                    <Text style={styles.autoAssignText}>Auto-assign</Text>
-                  </TouchableOpacity>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
-                    {previousWashers.filter((w: any) => w.cleanerId !== s.preferredCleanerId).map((w: any) => (
-                      <TouchableOpacity key={w.cleanerId} style={styles.reassignChip} onPress={() => reassign.mutate({ id: s.id, cleanerId: w.cleanerId })}>
-                        <Text style={styles.reassignName}>{w.name}</Text>
-                        <Text style={[styles.reassignOnline, { color: w.online ? Colors.dark.success : Colors.dark.tabIconDefault }]}>{w.online ? '● Online' : '○ Offline'}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
               <View style={styles.pkgTop}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.pkgTitle}>{minutesLabel(s.dailyMinutes)} daily · {s.washesTotal} washes</Text>

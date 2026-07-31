@@ -44,6 +44,11 @@ export default function PackageDetailScreen() {
     onSuccess: () => { invalidate(); Alert.alert('Done', 'That day was dropped and the package extended by a day.'); },
     onError: (e: any) => Alert.alert('Error', e?.message || 'Could not update the day.'),
   });
+  const markPaid = useMutation({
+    mutationFn: (billId: number) => apiFetch(`/api/subscriptions/${pkgId}/bills/${billId}/paid`, { method: 'PATCH' }),
+    onSuccess: invalidate,
+    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not update.'),
+  });
 
   if (isLoading) return <SafeAreaView style={styles.root}><ActivityIndicator style={{ marginTop: 60 }} color={Colors.dark.tint} /></SafeAreaView>;
   if (!pkg) return (
@@ -116,7 +121,19 @@ export default function PackageDetailScreen() {
                 <View key={b.id} style={styles.billRow}>
                   <Text style={styles.billWeek}>Week {b.weekIndex + 1}</Text>
                   <Text style={styles.billMeta}>{b.washesCount} wash{b.washesCount > 1 ? 'es' : ''} · ₹{b.amountDue}</Text>
-                  <Text style={[styles.billStatus, { color: b.status === 'paid' ? Colors.dark.success : '#FBBF24' }]}>{b.status === 'paid' ? 'Paid ✓' : 'Due'}</Text>
+                  {b.status === 'paid'
+                    ? <Text style={[styles.billStatus, { color: Colors.dark.success }]}>Paid ✓</Text>
+                    : (
+                      <TouchableOpacity
+                        style={styles.markPaidBtn}
+                        onPress={() => Alert.alert('Mark as paid?', `Confirm you paid your washer ₹${b.amountDue} for week ${b.weekIndex + 1}.`, [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'I’ve paid', onPress: () => markPaid.mutate(b.id) },
+                        ])}
+                      >
+                        <Text style={styles.markPaidText}>Mark paid</Text>
+                      </TouchableOpacity>
+                    )}
                 </View>
               ))}
             </View>
@@ -131,8 +148,9 @@ export default function PackageDetailScreen() {
             const t = new Date(d.scheduledAt).getTime();
             const actionable = ['scheduled', 'accepted', 'arrived'].includes(d.status);
             const isPastAssigned = ['accepted', 'arrived'].includes(d.status) && t < Date.now();
+            const openable = ['accepted', 'arrived', 'in_progress', 'completed'].includes(d.status);
             return (
-              <View key={d.id} style={styles.dayRow}>
+              <TouchableOpacity key={d.id} style={styles.dayRow} disabled={!openable} onPress={() => router.push(`/booking/${d.id}`)} activeOpacity={0.7}>
                 <Text style={styles.dayDate}>{fmtDate(d.scheduledAt)}</Text>
                 <Text style={[styles.dayStatus, { color: st.color }]}>{st.label}{d.status === 'cancelled' && d.notes === 'no_show' ? ' (no-show)' : ''}</Text>
                 {actionable && (
@@ -147,7 +165,8 @@ export default function PackageDetailScreen() {
                     </TouchableOpacity>
                   </View>
                 )}
-              </View>
+                {openable && <AppIcon name="chevron-right" size={16} color={Colors.dark.tabIconDefault} />}
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -216,6 +235,8 @@ const styles = StyleSheet.create({
   billWeek: { color: Colors.dark.text, fontSize: 14, fontWeight: '600', width: 70 },
   billMeta: { color: Colors.dark.tabIconDefault, fontSize: 13, flex: 1 },
   billStatus: { fontSize: 13, fontWeight: '700' },
+  markPaidBtn: { backgroundColor: Colors.dark.success, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
+  markPaidText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
   dayRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, gap: 10 },
   dayDate: { color: Colors.dark.text, fontSize: 13, width: 64 },
   dayStatus: { fontSize: 13, flex: 1 },
