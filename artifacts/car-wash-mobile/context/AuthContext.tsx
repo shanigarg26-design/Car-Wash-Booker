@@ -30,21 +30,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkAuth = async () => {
     setIsLoading(true);
-    // On a cold start the first request can time out while the server wakes.
-    // A 401 is a definitive "logged out" (stop immediately); any other failure
-    // (timeout / network / 5xx) is likely the server waking — retry a few times
-    // with backoff so we don't hang forever OR falsely bounce the user to login.
-    const maxAttempts = 4;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // A 401 is a definitive "logged out" (stop immediately). Any other failure
+    // (timeout / network / 5xx) is likely the free-tier server cold-starting, so
+    // retry — never hang forever, never falsely bounce the user to login.
+    // Timeouts step up: a short first try catches a dead socket quickly, then
+    // longer tries ride out the ~30-60s wake-up in a single request.
+    const timeouts = [12000, 60000, 60000];
+    for (let attempt = 0; attempt < timeouts.length; attempt++) {
       try {
-        const data = await apiFetch('/api/users/me', { timeoutMs: 15000 });
+        const data = await apiFetch('/api/users/me', { timeoutMs: timeouts[attempt] });
         setUser(data);
         setIsLoading(false);
         return;
       } catch (e: any) {
         if (e?.status === 401) { setUser(null); setIsLoading(false); return; }
-        if (attempt < maxAttempts) {
-          await new Promise(r => setTimeout(r, attempt * 1500));
+        if (attempt < timeouts.length - 1) {
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
         setUser(null);
