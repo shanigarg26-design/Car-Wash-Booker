@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, Award, Banknote, Bell, Briefcase,
-  Calendar, Car, Check, CheckCircle, ChevronRight, Circle, Clock, CreditCard, Droplet, Droplets, Pencil,
+  Calendar, Car, Check, CheckCircle, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Circle, Clock, CreditCard, Droplet, Droplets, Pencil,
   FileText, Home, Info, Loader, LogIn, LogOut, Mail, MapPin, MapPinOff, MessageCircle, Minus, Navigation,
   Phone, Plus, PlusCircle, RefreshCw, Search, Send, Shield, Smartphone, Star,
   Tag, Terminal, Truck, User, UserCheck, X, XCircle, Zap,
@@ -21,6 +21,9 @@ const ICON_MAP: Record<string, React.ComponentType<any>> = {
   'check': Check,
   'check-circle': CheckCircle,
   'chevron-right': ChevronRight,
+  'chevron-left': ChevronLeft,
+  'chevron-up': ChevronUp,
+  'chevron-down': ChevronDown,
   'circle': Circle,
   'clock': Clock,
   'credit-card': CreditCard,

@@ -499,12 +499,19 @@ function CleanerDashboard() {
                 : 'You’ll auto go online at your next selected slot.'}
           </Text>
 
-          {/* Working hours control */}
+          {/* Working hours control (preference slots) */}
           <TouchableOpacity style={styles.viewMapRow} onPress={() => setShowSlots(true)} activeOpacity={0.7}>
             <AppIcon name="clock" size={14} color={Colors.dark.tint} />
             <Text style={styles.viewMapText}>
-              {hasSchedule ? `Working hours · ${availableSlots.length} slots` : 'Set your available hours'}
+              {hasSchedule ? `Preference hours · ${availableSlots.length} slots` : 'Set your available hours'}
             </Text>
+            <AppIcon name="chevron-right" size={14} color={Colors.dark.tint} />
+          </TouchableOpacity>
+
+          {/* Calendar of actual bookings on those slots */}
+          <TouchableOpacity style={styles.viewMapRow} onPress={() => router.push('/calendar')} activeOpacity={0.7}>
+            <AppIcon name="calendar" size={14} color={Colors.dark.tint} />
+            <Text style={styles.viewMapText}>View my calendar (day / week / month)</Text>
             <AppIcon name="chevron-right" size={14} color={Colors.dark.tint} />
           </TouchableOpacity>
 

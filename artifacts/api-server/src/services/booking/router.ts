@@ -396,8 +396,11 @@ router.patch("/bookings/:id/accept", async (req, res): Promise<void> => {
       await db.update(subscriptionsTable)
         .set({ cleanerId: cleaner.id, pricePerWash: cleaner.pricePerClean, preferredCleanerId: cleaner.id })
         .where(and(eq(subscriptionsTable.id, pkg.id), isNull(subscriptionsTable.cleanerId)));
+      // Stamp this washer on every remaining day so they're his upcoming commitments
+      // (show on his calendar/list, count as his occupied slots) — the sweep flips each
+      // to 'accepted' at its time.
       await db.update(bookingsTable)
-        .set({ priceQuoted: cleaner.pricePerClean })
+        .set({ priceQuoted: cleaner.pricePerClean, cleanerId: cleaner.id })
         .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "scheduled")));
     }
   }

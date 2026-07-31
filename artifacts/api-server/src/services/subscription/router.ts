@@ -14,7 +14,8 @@ async function extendPackageByOneDay(pkg: typeof subscriptionsTable.$inferSelect
   const nextDay = new Date(pkg.expiresAt.getTime() + 86_400_000);
   await db.insert(bookingsTable).values({
     customerId: pkg.customerId,
-    cleanerId: null,
+    cleanerId: pkg.cleanerId ?? null, // keep make-up days owned by the bound washer
+
     customerAddress: pkg.address ?? "",
     customerLat: pkg.latitude != null ? Number(pkg.latitude) : null,
     customerLng: pkg.longitude != null ? Number(pkg.longitude) : null,
