@@ -752,8 +752,20 @@ export default function BookingDetailScreen() {
             <Text style={[styles.mainTitle, { color: Colors.dark.tint }]}>Wash Complete!</Text>
             <Text style={[styles.mainSubtitle, { marginBottom: 20 }]}>Your car is sparkling clean ✨</Text>
 
-            {/* Payment Card – shown only to customer */}
-            {!isWasher && (
+            {/* Payment Card – shown only to customer. Package days are billed weekly,
+                NOT per-day, so show a package note instead of a cash prompt. */}
+            {!isWasher && booking.subscriptionId && (
+              <View style={styles.paymentCard}>
+                <View style={styles.paymentHeader}>
+                  <AppIcon name="calendar" size={20} color={Colors.dark.tint} />
+                  <Text style={styles.paymentTitle}>Daily package wash</Text>
+                </View>
+                <Text style={styles.paymentNote}>
+                  No payment today — this wash is part of your daily package. You’ll settle the week’s total (₹{booking.priceQuoted}/wash) with your washer offline. See the package for the running total.
+                </Text>
+              </View>
+            )}
+            {!isWasher && !booking.subscriptionId && (
               <View style={styles.paymentCard}>
                 <View style={styles.paymentHeader}>
                   <AppIcon name="banknote" size={20} color={Colors.dark.tint} />
@@ -987,8 +999,9 @@ export default function BookingDetailScreen() {
           </View>
         )}
 
-        {/* WASHER: Completed – Payment Received */}
-        {isCompleted && isWasher && (
+        {/* WASHER: Completed – Payment Received (per-day cash only for non-package jobs;
+            package days are collected weekly from the package screen). */}
+        {isCompleted && isWasher && !booking.subscriptionId && (
           <TouchableOpacity
             style={styles.paymentReceivedBtn}
             activeOpacity={0.85}
@@ -997,6 +1010,11 @@ export default function BookingDetailScreen() {
             <AppIcon name="banknote" size={22} color="#FFF" />
             <Text style={styles.paymentReceivedBtnText}>Payment Received  ₹{booking.amountCharged ?? booking.priceQuoted}</Text>
           </TouchableOpacity>
+        )}
+        {isCompleted && isWasher && booking.subscriptionId && (
+          <View style={styles.paymentCard}>
+            <Text style={styles.paymentNote}>Daily-package wash done ✓ — collect this week’s total from “Packages You Serve,” not per day.</Text>
+          </View>
         )}
 
         {/* Cancelled – Try Again */}
