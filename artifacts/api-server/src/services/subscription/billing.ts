@@ -63,6 +63,7 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
     }
 
     // 2 & 3) Handle unpaid bills: remind, then auto-cancel past the grace window.
+    let autoCancelledThis = false;
     for (const bill of byWeek.values()) {
       if (bill.status !== "due") continue;
       const due = bill.dueDate.getTime();
@@ -72,6 +73,7 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
         await db.update(bookingsTable).set({ status: "cancelled", cleanerId: null })
           .where(and(eq(bookingsTable.subscriptionId, pkg.id), inArray(bookingsTable.status, ["scheduled", "accepted", "arrived"])));
         autoCancelled++;
+        autoCancelledThis = true;
         await pushUser(pkg.customerId, "Package cancelled — payment overdue", `Week ${bill.weekIndex + 1}'s ₹${bill.amountDue} wasn’t settled in time, so the package was cancelled.`, { type: "package_autocancelled", subscriptionId: pkg.id });
         if (pkg.cleanerId) { const uid = await washerUserId(pkg.cleanerId); if (uid) await pushUser(uid, "Package cancelled — unpaid", `Week ${bill.weekIndex + 1}'s payment wasn’t received in time. The package was cancelled and you’re freed from its remaining days.`, { type: "package_autocancelled", subscriptionId: pkg.id }); }
         break; // package is gone; stop processing its other bills
@@ -82,6 +84,27 @@ export async function runPackageBillingSweep(): Promise<{ billsCreated: number; 
         await pushUser(pkg.customerId, "Payment reminder", `₹${bill.amountDue} for week ${bill.weekIndex + 1} is still pending. Pay your washer to keep the package running.`, { type: "package_bill_due", subscriptionId: pkg.id });
         if (pkg.cleanerId) { const uid = await washerUserId(pkg.cleanerId); if (uid) await pushUser(uid, "Payment pending", `You haven’t confirmed payment for week ${bill.weekIndex + 1}. Do you want to continue the package? You can cancel it if you’d prefer not to.`, { type: "package_payment_pending", subscriptionId: pkg.id }); }
       }
+    }
+
+    // 4) Package finished (past its end date) → settle any remaining washes, close it,
+    //    and invite the owner to renew.
+    if (!autoCancelledThis && now > pkg.expiresAt.getTime()) {
+      const doneRows = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+        .where(and(eq(bookingsTable.subscriptionId, pkg.id), eq(bookingsTable.status, "completed")));
+      const billsNow = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, pkg.id));
+      const billedWashes = billsNow.reduce((s, x) => s + x.washesCount, 0);
+      const unbilled = doneRows.length - billedWashes;
+      if (unbilled > 0 && rate > 0) {
+        const nextWeek = billsNow.reduce((m, x) => Math.max(m, x.weekIndex + 1), 0);
+        const end = new Date(now);
+        await db.insert(packageBillsTable).values({
+          subscriptionId: pkg.id, weekIndex: nextWeek, weekStart: end, weekEnd: end,
+          washesCount: unbilled, amountDue: unbilled * rate, status: "due",
+          dueDate: new Date(now + GRACE_MS),
+        });
+      }
+      await db.update(subscriptionsTable).set({ status: "expired" }).where(eq(subscriptionsTable.id, pkg.id));
+      await pushUser(pkg.customerId, "Package finished 🎉", "Your daily wash package has ended. Tap to start a new one and keep your car spotless.", { type: "package_ended", subscriptionId: pkg.id });
     }
   }
 

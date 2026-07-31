@@ -35,13 +35,14 @@ export function currentIstSlot(at: Date = new Date()): number {
 }
 
 function worksThisSlot(availableSlots: string | null, slot: number): boolean {
-  if (!availableSlots) return true;         // no schedule set → available (backward compatible)
+  // Preference slots are mandatory: a washer with no slots set is available for nothing
+  // (he must pick his working hours before he can receive any booking).
+  if (slot < 0 || !availableSlots) return false;
   try {
     const arr = JSON.parse(availableSlots);
-    if (!Array.isArray(arr) || arr.length === 0) return true;
-    if (slot < 0) return false;             // outside working window and a schedule exists
+    if (!Array.isArray(arr) || arr.length === 0) return false;
     return arr.includes(slot);
-  } catch { return true; }
+  } catch { return false; }
 }
 
 /** Send a booking to exactly ONE cleaner (used when the owner requests a specific washer). */
@@ -62,25 +63,36 @@ export async function dispatchToSpecificCleaner(
 }
 
 /**
- * A requested (preferred) washer didn't take the day — hand the package back to the
- * owner. The day is returned to 'scheduled' (not lost) and the package is paused
- * ('unassigned') until the owner chooses auto-assign or another washer.
+ * A requested (preferred) washer didn't take the day (declined, timed out, or is
+ * busy that slot). We don't ask the owner to pick another — we drop the preference
+ * and search GENERICALLY: broadcast the day to any available washer whose slot fits
+ * (online or offline). The search window is reset so the generic search gets a fresh
+ * 5 minutes. If the owner wants a different washer, they cancel and start a new package.
  */
-export async function pausePackageForOwnerChoice(
-  pkg: { id: number; customerId: number }, bookingId: number, reason: "declined" | "offline" | "unavailable",
+export async function fallbackPreferredToGeneric(
+  pkg: { id: number; customerId: number }, bookingId: number,
 ): Promise<void> {
-  await db.update(bookingsTable).set({ status: "scheduled", cleanerId: null }).where(eq(bookingsTable.id, bookingId));
+  await db.update(subscriptionsTable).set({ preferredCleanerId: null }).where(eq(subscriptionsTable.id, pkg.id));
   await db.update(bookingDispatchesTable).set({ status: "cancelled" })
     .where(and(eq(bookingDispatchesTable.bookingId, bookingId), eq(bookingDispatchesTable.status, "pending")));
-  await db.update(subscriptionsTable).set({ status: "unassigned" }).where(eq(subscriptionsTable.id, pkg.id));
+
+  const [bk] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, bookingId));
+  if (!bk) return;
+  // Reset scheduledAt to now so the generic search gets a full window (the sweep measures
+  // the search timeout from scheduledAt) and dispatch matches washers free at this time.
+  await db.update(bookingsTable).set({ status: "searching", cleanerId: null, scheduledAt: new Date() })
+    .where(eq(bookingsTable.id, bookingId));
+
+  const tried = await db.select({ cleanerId: bookingDispatchesTable.cleanerId }).from(bookingDispatchesTable).where(eq(bookingDispatchesTable.bookingId, bookingId));
+  await dispatchToNearestCleaners(bookingId, bk.customerLat, bk.customerLng, tried.map(d => d.cleanerId), MAX_DISPATCH,
+    { vehicleType: bk.vehicleType, cleanType: bk.cleanType ?? "exterior", address: bk.customerAddress, price: bk.priceQuoted }, true);
+  scheduleSearchRetry(bookingId, bk.customerLat, bk.customerLng, bk.vehicleType, bk.cleanType ?? "exterior", bk.customerAddress, bk.priceQuoted, Date.now(), true);
+
   const [cust] = await db.select({ token: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, pkg.customerId));
   if (cust?.token) {
-    const why = reason === "declined" ? "declined"
-      : reason === "unavailable" ? "isn’t free for that time"
-      : "went offline";
-    await sendPush([cust.token], "Washer didn't accept",
-      `Your requested washer ${why}. Choose auto-assign or pick another washer.`,
-      { type: "package_needs_owner", subscriptionId: pkg.id });
+    await sendPush([cust.token], "Finding your washer",
+      "Your requested washer didn't take today's wash — we're finding any available washer nearby.",
+      { type: "package_generic_search", subscriptionId: pkg.id });
   }
 }
 // If a cleaner ACCEPTS a job then goes offline (phone off) before arriving, the booking
@@ -343,6 +355,11 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
           if (u?.token) {
             await sendPush([u.token], "🗓️ Today's Package Wash", `Head to ${b.customerAddress} for your daily wash.`, { type: "package_day", bookingId: b.id });
           }
+          // Tell the OWNER his wash is starting today so he's ready to share the OTP.
+          const [cust] = await db.select({ token: usersTable.expoPushToken }).from(usersTable).where(eq(usersTable.id, b.customerId));
+          if (cust?.token) {
+            await sendPush([cust.token], "🚗 Today's wash is on", "Your daily-package washer is assigned for today. Open the app to share your OTP when he arrives.", { type: "package_day_customer", bookingId: b.id });
+          }
           promotedScheduled++;
           console.log(`[Sweep] Package booking ${b.id} assigned to bound washer ${pkg.cleanerId}`);
         }
@@ -370,8 +387,8 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
             console.log(`[Sweep] Package ${pkg.id} day ${b.id} sent to requested washer ${pkg.preferredCleanerId}`);
           }
         } else {
-          // He's not free for that slot (already booked) → hand back to the owner.
-          await pausePackageForOwnerChoice(pkg, b.id, "unavailable");
+          // He's not free for that slot (already booked) → search generically instead.
+          await fallbackPreferredToGeneric(pkg, b.id);
         }
         continue;
       }
@@ -401,12 +418,12 @@ export async function sweepStaleBookings(): Promise<{ cancelledSearching: number
   );
   for (const b of staleSearching) {
     cancelRetry(b.id);
-    // A requested-washer package day that was never accepted → hand back to the owner
-    // (choose auto-assign or another washer) instead of losing the day.
+    // A requested-washer package day that wasn't accepted in the 5-min window → fall
+    // back to a generic search (any available washer) instead of losing the day.
     if (b.subscriptionId) {
       const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, b.subscriptionId));
       if (pkg && pkg.status === "active" && pkg.cleanerId == null && pkg.preferredCleanerId != null) {
-        await pausePackageForOwnerChoice(pkg, b.id, "declined");
+        await fallbackPreferredToGeneric(pkg, b.id);
         continue;
       }
     }

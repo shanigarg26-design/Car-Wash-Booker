@@ -19,7 +19,7 @@ import {
 } from "@workspace/api-zod";
 import { enrichBooking, calcPrice, generateServiceOtp, calcProratedAmount } from "./service.js";
 import { findCoveringSubscription } from "../subscription/router.js";
-import { dispatchToNearestCleaners, scheduleSearchRetry, cancelRetry, MAX_DISPATCH, MAX_DISPATCH_RADIUS_KM, haversineKm, pausePackageForOwnerChoice } from "./dispatcher.js";
+import { dispatchToNearestCleaners, scheduleSearchRetry, cancelRetry, MAX_DISPATCH, MAX_DISPATCH_RADIUS_KM, haversineKm, fallbackPreferredToGeneric } from "./dispatcher.js";
 import { sendPush } from "../../shared/push.js";
 
 const router: IRouter = Router();
@@ -433,14 +433,14 @@ router.patch("/bookings/:id/decline", async (req, res): Promise<void> => {
 
   await db.update(bookingDispatchesTable).set({ status: "declined" }).where(eq(bookingDispatchesTable.id, dispatch.id));
 
-  // If the owner requested THIS washer for a daily package and he declines, don't
-  // broadcast — hand the package back to the owner (auto-assign or pick another).
+  // If the owner requested THIS washer for a daily package and he declines, don't keep
+  // it pending — fall back to a generic search (any available washer).
   const [declinedBooking] = await db.select().from(bookingsTable).where(eq(bookingsTable.id, params.data.id));
   if (declinedBooking?.subscriptionId) {
     const [pkg] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, declinedBooking.subscriptionId));
     if (pkg && pkg.status === "active" && pkg.cleanerId == null && pkg.preferredCleanerId === cleaner.id) {
-      await pausePackageForOwnerChoice(pkg, declinedBooking.id, "declined");
-      res.json({ ok: true, paused: true });
+      await fallbackPreferredToGeneric(pkg, declinedBooking.id);
+      res.json({ ok: true, genericSearch: true });
       return;
     }
   }

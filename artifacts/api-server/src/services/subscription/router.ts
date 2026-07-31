@@ -273,7 +273,6 @@ router.post("/subscriptions/daily", async (req, res): Promise<void> => {
   const finalClean = (b.washType as string) ?? (b.cleanType as string) ?? "exterior";
   const dailyMinutes = Number(b.dailyMinutes);
   const durationDays = Number(b.durationDays);
-  const address = (b.address as string) ?? "";
   const lat = b.latitude, lng = b.longitude;
 
   if (!Number.isInteger(dailyMinutes) || dailyMinutes < 0 || dailyMinutes >= 1440) {
@@ -282,9 +281,11 @@ router.post("/subscriptions/daily", async (req, res): Promise<void> => {
   if (![7, 30].includes(durationDays)) {
     res.status(400).json({ error: "invalid_duration", message: "Choose a weekly or monthly plan." }); return;
   }
-  if (!address || lat == null || lng == null) {
-    res.status(400).json({ error: "no_location", message: "A service address is required." }); return;
+  // Location (coordinates) is required; a text address is optional (we fall back to coords).
+  if (lat == null || lng == null) {
+    res.status(400).json({ error: "no_location", message: "Your location is required. Enable location access and try again." }); return;
   }
+  const address = ((b.address as string) || "").trim() || `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
 
   // Optional: owner re-requests a specific washer — only one who has cleaned his car
   // before (verified via a prior completed booking).
@@ -381,6 +382,26 @@ router.patch("/subscriptions/:id/cancel", async (req, res): Promise<void> => {
   await db.update(bookingsTable).set({ status: "cancelled", cleanerId: null })
     .where(and(eq(bookingsTable.subscriptionId, id), inArray(bookingsTable.status, ["scheduled", "accepted", "arrived"])));
 
+  // Final settlement: bill any washes already done that haven't been billed yet, so the
+  // amount owed for work delivered is recorded and the washer can collect it.
+  if (sub.kind === "daily" && sub.cleanerId) {
+    const rate = sub.pricePerWash ?? 0;
+    const doneRows = await db.select({ id: bookingsTable.id }).from(bookingsTable)
+      .where(and(eq(bookingsTable.subscriptionId, id), eq(bookingsTable.status, "completed")));
+    const existingBills = await db.select().from(packageBillsTable).where(eq(packageBillsTable.subscriptionId, id));
+    const billedWashes = existingBills.reduce((s, x) => s + x.washesCount, 0);
+    const unbilled = doneRows.length - billedWashes;
+    if (unbilled > 0 && rate > 0) {
+      const now = new Date();
+      const nextWeek = existingBills.reduce((m, x) => Math.max(m, x.weekIndex + 1), 0);
+      await db.insert(packageBillsTable).values({
+        subscriptionId: id, weekIndex: nextWeek, weekStart: now, weekEnd: now,
+        washesCount: unbilled, amountDue: unbilled * rate, status: "due",
+        dueDate: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000),
+      });
+    }
+  }
+
   // Tell the other side.
   if (isCustomer && sub.cleanerId) {
     const [c] = await db.select({ uid: cleanersTable.userId }).from(cleanersTable).where(eq(cleanersTable.id, sub.cleanerId));
@@ -450,8 +471,11 @@ router.patch("/subscriptions/:id/bills/:billId/paid", async (req, res): Promise<
 
   const [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.id, id));
   if (!sub) { res.status(404).json({ error: "Package not found" }); return; }
+  // Either side may confirm payment: the bound washer ("received") or the owner ("paid").
   const [cleaner] = await db.select().from(cleanersTable).where(eq(cleanersTable.userId, userId));
-  if (!cleaner || sub.cleanerId !== cleaner.id) { res.status(403).json({ error: "Only the assigned washer can confirm payment" }); return; }
+  const isWasher = cleaner != null && sub.cleanerId === cleaner.id;
+  const isOwner = sub.customerId === userId;
+  if (!isWasher && !isOwner) { res.status(403).json({ error: "Not your package" }); return; }
 
   const [bill] = await db.select().from(packageBillsTable)
     .where(and(eq(packageBillsTable.id, billId), eq(packageBillsTable.subscriptionId, id)));
@@ -459,7 +483,13 @@ router.patch("/subscriptions/:id/bills/:billId/paid", async (req, res): Promise<
   if (bill.status === "paid") { res.json({ ok: true, alreadyPaid: true }); return; }
 
   await db.update(packageBillsTable).set({ status: "paid", paidAt: new Date() }).where(eq(packageBillsTable.id, billId));
-  await pushToUser(sub.customerId, "Payment confirmed ✓", `Your washer confirmed ₹${bill.amountDue} received for week ${bill.weekIndex + 1}.`, { type: "package_bill_paid", subscriptionId: id });
+  // Notify the OTHER party.
+  if (isWasher) {
+    await pushToUser(sub.customerId, "Payment confirmed ✓", `Your washer confirmed ₹${bill.amountDue} received for week ${bill.weekIndex + 1}.`, { type: "package_bill_paid", subscriptionId: id });
+  } else if (sub.cleanerId) {
+    const [c] = await db.select({ uid: cleanersTable.userId }).from(cleanersTable).where(eq(cleanersTable.id, sub.cleanerId));
+    if (c) await pushToUser(c.uid, "Owner marked paid ✓", `The owner marked ₹${bill.amountDue} for week ${bill.weekIndex + 1} as paid.`, { type: "package_bill_paid", subscriptionId: id });
+  }
   res.json({ ok: true });
 });
 
