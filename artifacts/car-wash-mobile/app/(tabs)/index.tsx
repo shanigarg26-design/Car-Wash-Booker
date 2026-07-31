@@ -14,6 +14,15 @@ import { useRouter } from 'expo-router';
 import { useWasherLocation } from '@/hooks/useWasherLocation';
 import IncomingBookingAlert from '@/components/IncomingBookingAlert';
 import CurrentLocationMap from '@/components/CurrentLocationMap';
+import AvailabilityManager from '@/components/AvailabilityManager';
+
+// Current half-hour slot index in IST (India). 0 = 06:00 … 23 = 17:30; -1 outside 6am–6pm.
+function currentIstSlot(): number {
+  const d = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const h = d.getUTCHours(), m = d.getUTCMinutes();
+  if (h < 6 || h >= 18) return -1;
+  return (h - 6) * 2 + (m >= 30 ? 1 : 0);
+}
 
 function getStatusColor(status: string) {
   switch (status) {
@@ -262,6 +271,11 @@ function CleanerDashboard() {
       : undefined,
   }));
   const pastJobs = bookings?.filter((b: any) => ['completed', 'cancelled'].includes(b.status)) || [];
+  // Upcoming scheduled/committed jobs (package & scheduled bookings assigned to this
+  // cleaner) so he knows where and when to go next.
+  const scheduledJobs = (bookings?.filter((b: any) =>
+    b.status === 'scheduled' || (b.status === 'accepted' && b.scheduledAt && new Date(b.scheduledAt).getTime() > Date.now() + 60_000)
+  ) || []).sort((a: any, b: any) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
 
   // Track bookings that were searching but got accepted by another cleaner while this
   // cleaner was looking at them — so we can show a "taken" notice instead of silently removing.
@@ -310,8 +324,25 @@ function CleanerDashboard() {
       method: 'PATCH',
       body: JSON.stringify({ available }),
     }),
+    // Silent — switching the toggle off must never pop a warning/confirmation.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cleanerProfile'] }),
-    onError: (e: any) => Alert.alert('Error', e.message),
+  });
+
+  // Working-hours slots (6AM–6PM IST, 24 half-hour slots).
+  const [showSlots, setShowSlots] = useState(false);
+  const availableSlots: number[] = Array.isArray(profile?.availableSlots) ? profile.availableSlots : [];
+  const hasSchedule = availableSlots.length > 0;
+  const nowSlot = currentIstSlot();
+  const withinHours = !hasSchedule || (nowSlot >= 0 && availableSlots.includes(nowSlot));
+  const effectiveOnline = (profile?.available ?? false) && withinHours;
+
+  const saveSlots = useMutation({
+    mutationFn: (slots: number[]) => apiFetch('/api/cleaners/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ availableSlots: slots }),
+    }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['cleanerProfile'] }); setShowSlots(false); },
+    onError: (e: any) => Alert.alert('Error', e?.message || 'Could not save your hours.'),
   });
 
   // Track live GPS — requests permission immediately on mount, pushes coords to backend
@@ -446,17 +477,31 @@ function CleanerDashboard() {
       showsVerticalScrollIndicator={false}
     >
       {/* One clear availability control — merges the old toggle + location boxes. */}
-      <View style={[styles.availabilityCard, profile?.available && styles.availabilityCardOnline]}>
+      <View style={[styles.availabilityCard, effectiveOnline && styles.availabilityCardOnline]}>
         <View style={{ flex: 1 }}>
           <View style={styles.availabilityRow}>
-            <View style={[styles.statusDot, { backgroundColor: profile?.available ? Colors.dark.success : Colors.dark.tabIconDefault }]} />
-            <Text style={styles.cardTitle}>{profile?.available ? "You're Online" : "You're Offline"}</Text>
+            <View style={[styles.statusDot, { backgroundColor: effectiveOnline ? Colors.dark.success : Colors.dark.tabIconDefault }]} />
+            <Text style={styles.cardTitle}>
+              {effectiveOnline ? "You're Online" : (profile?.available && !withinHours ? 'Off — outside your hours' : "You're Offline")}
+            </Text>
           </View>
           <Text style={styles.cardSubtitle}>
-            {profile?.available
-              ? 'Receiving bookings within 5 km. Turn the toggle off when you want to stop.'
-              : 'Turn the toggle on to start receiving bookings.'}
+            {!profile?.available
+              ? 'Turn the toggle on to follow your schedule.'
+              : withinHours
+                ? 'Receiving bookings within 5 km. Switch off any time.'
+                : 'You’ll auto go online at your next selected slot.'}
           </Text>
+
+          {/* Working hours control */}
+          <TouchableOpacity style={styles.viewMapRow} onPress={() => setShowSlots(true)} activeOpacity={0.7}>
+            <AppIcon name="clock" size={14} color={Colors.dark.tint} />
+            <Text style={styles.viewMapText}>
+              {hasSchedule ? `Working hours · ${availableSlots.length} slots` : 'Set your available hours'}
+            </Text>
+            <AppIcon name="chevron-right" size={14} color={Colors.dark.tint} />
+          </TouchableOpacity>
+
           {locationStatus === 'denied' && (
             <TouchableOpacity style={styles.locationWarnInline} onPress={requestPermission} activeOpacity={0.8}>
               <AppIcon name="map-pin-off" size={14} color="#F87171" />
@@ -496,7 +541,39 @@ function CleanerDashboard() {
         </View>
       )}
 
-      {incomingRequests.length === 0 && profile?.available && (
+      {/* Upcoming scheduled bookings — where & when to go next */}
+      {scheduledJobs.length > 0 && (
+        <View style={{ marginTop: 20 }}>
+          <Text style={styles.sectionTitle}>Upcoming Scheduled ({scheduledJobs.length})</Text>
+          {scheduledJobs.map((b: any) => (
+            <TouchableOpacity
+              key={b.id}
+              style={styles.scheduledCard}
+              onPress={() => router.push(`/booking/${b.id}`)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.scheduledWhen}>
+                <AppIcon name="clock" size={16} color={Colors.dark.tint} />
+                <Text style={styles.scheduledTime}>
+                  {new Date(b.scheduledAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              </View>
+              <View style={styles.scheduledRow}>
+                <AppIcon name="map-pin" size={14} color={Colors.dark.tabIconDefault} />
+                <Text style={styles.scheduledAddr} numberOfLines={2}>{b.customerAddress}</Text>
+              </View>
+              {b.customerName ? (
+                <View style={styles.scheduledRow}>
+                  <AppIcon name="user" size={14} color={Colors.dark.tabIconDefault} />
+                  <Text style={styles.scheduledSub}>{b.customerName}</Text>
+                </View>
+              ) : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {incomingRequests.length === 0 && effectiveOnline && (
         <View style={styles.waitingCard}>
           <ActivityIndicator color={Colors.dark.tint} />
           <Text style={styles.waitingText}>Waiting for requests…</Text>
@@ -613,6 +690,14 @@ function CleanerDashboard() {
         </View>
       </View>
     </Modal>
+
+    <AvailabilityManager
+      visible={showSlots}
+      initialSlots={availableSlots}
+      saving={saveSlots.isPending}
+      onClose={() => setShowSlots(false)}
+      onSave={(slots) => saveSlots.mutate(slots)}
+    />
     </>
   );
 }
@@ -903,6 +988,15 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   viewMapText: { color: Colors.dark.tint, fontSize: 13, fontWeight: '600' },
+  scheduledCard: {
+    backgroundColor: Colors.dark.card, borderRadius: 14, padding: 16, marginBottom: 10,
+    borderWidth: 1, borderColor: Colors.dark.border, gap: 8,
+  },
+  scheduledWhen: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  scheduledTime: { color: Colors.dark.tint, fontSize: 15, fontWeight: '700' },
+  scheduledRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  scheduledAddr: { flex: 1, color: Colors.dark.text, fontSize: 14 },
+  scheduledSub: { color: Colors.dark.tabIconDefault, fontSize: 13 },
   locMapRoot: { flex: 1, backgroundColor: Colors.dark.background },
   locMapHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

@@ -9,6 +9,9 @@ export const cleanersTable = pgTable("cleaners", {
   bio: text("bio"),
   pricePerClean: integer("price_per_clean").notNull().default(500),
   available: boolean("available").notNull().default(true),
+  // JSON array of selected half-hour slot indices (0 = 06:00 IST … 23 = 17:30 IST).
+  // null/empty = no schedule set yet → treated as available all day (backward compatible).
+  availableSlots: text("available_slots"),
   rating: real("rating"),
   totalCleans: integer("total_cleans").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

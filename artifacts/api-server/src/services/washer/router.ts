@@ -49,6 +49,7 @@ router.get("/cleaners/me", async (req, res): Promise<void> => {
       id: cleanersTable.id, userId: cleanersTable.userId, name: usersTable.name,
       phone: cleanersTable.phone, bio: cleanersTable.bio,
       pricePerClean: cleanersTable.pricePerClean, available: cleanersTable.available,
+      availableSlots: cleanersTable.availableSlots,
       rating: cleanersTable.rating, totalCleans: cleanersTable.totalCleans,
       createdAt: cleanersTable.createdAt,
     })
@@ -57,7 +58,12 @@ router.get("/cleaners/me", async (req, res): Promise<void> => {
     .where(eq(cleanersTable.userId, userId));
 
   if (!cleaner) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
-  res.json(GetMyWasherProfileResponse.parse({ ...cleaner, pricePerWash: cleaner.pricePerClean, totalWashes: cleaner.totalCleans, name: cleaner.name ?? "", createdAt: cleaner.createdAt.toISOString() }));
+  let slots: number[] = [];
+  if (cleaner.availableSlots) { try { const p = JSON.parse(cleaner.availableSlots); if (Array.isArray(p)) slots = p.filter((n: unknown) => Number.isInteger(n)); } catch { /* ignore */ } }
+  res.json({
+    ...GetMyWasherProfileResponse.parse({ ...cleaner, pricePerWash: cleaner.pricePerClean, totalWashes: cleaner.totalCleans, name: cleaner.name ?? "", createdAt: cleaner.createdAt.toISOString() }),
+    availableSlots: slots,
+  });
 });
 
 router.patch("/cleaners/me", async (req, res): Promise<void> => {
@@ -75,6 +81,16 @@ router.patch("/cleaners/me", async (req, res): Promise<void> => {
   if (parsed.data.pricePerWash != null) updateData.pricePerClean = parsed.data.pricePerWash;
   if (parsed.data.available    != null) updateData.available    = parsed.data.available;
 
+  // availableSlots isn't in the generated body schema — read it directly. Accept an
+  // array of half-hour slot indices (0..23); clamp/dedupe defensively.
+  const rawSlots = (req.body as Record<string, unknown>).availableSlots;
+  if (Array.isArray(rawSlots)) {
+    const slots = Array.from(new Set(
+      rawSlots.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 23),
+    )).sort((a, b) => a - b);
+    updateData.availableSlots = JSON.stringify(slots);
+  }
+
   const [updated] = await db.update(cleanersTable).set(updateData)
     .where(eq(cleanersTable.userId, userId)).returning();
   if (!updated) { res.status(404).json({ error: "Cleaner profile not found" }); return; }
@@ -86,7 +102,12 @@ router.patch("/cleaners/me", async (req, res): Promise<void> => {
   }
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
-  res.json(UpdateMyWasherProfileResponse.parse({ ...updated, pricePerWash: updated.pricePerClean, totalWashes: updated.totalCleans, name: user?.name ?? "", createdAt: updated.createdAt.toISOString() }));
+  let slotsOut: number[] = [];
+  if (updated.availableSlots) { try { const p = JSON.parse(updated.availableSlots); if (Array.isArray(p)) slotsOut = p.filter((n: unknown) => Number.isInteger(n)); } catch { /* ignore */ } }
+  res.json({
+    ...UpdateMyWasherProfileResponse.parse({ ...updated, pricePerWash: updated.pricePerClean, totalWashes: updated.totalCleans, name: user?.name ?? "", createdAt: updated.createdAt.toISOString() }),
+    availableSlots: slotsOut,
+  });
 });
 
 router.get("/cleaners", async (req, res): Promise<void> => {

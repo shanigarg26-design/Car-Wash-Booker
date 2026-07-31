@@ -21,6 +21,28 @@ export const SEARCH_RETRY_INTERVAL  = 10_000;          // retry every 10 s
 // within this window. The app pushes every ~20 s while online, so a phone that gets
 // switched off / loses signal goes "stale" and stops receiving bookings automatically.
 export const ONLINE_STALE_MS        = 5 * 60 * 1000;   // 5 minutes
+export const SCHEDULED_BUFFER_MS    = 30 * 60 * 1000;  // no new jobs within 30 min of a scheduled one
+
+// Current half-hour slot index in IST (India). 0 = 06:00, 1 = 06:30 … 23 = 17:30.
+// Returns -1 outside the 06:00–18:00 window. Slots are stored per cleaner as a JSON
+// array of these indices; an empty/unset schedule means "available all day".
+export function currentIstSlot(at: Date = new Date()): number {
+  const istMs = at.getTime() + 5.5 * 60 * 60 * 1000; // shift UTC → IST
+  const d = new Date(istMs);
+  const h = d.getUTCHours(), m = d.getUTCMinutes();
+  if (h < 6 || h >= 18) return -1;
+  return (h - 6) * 2 + (m >= 30 ? 1 : 0);
+}
+
+function worksThisSlot(availableSlots: string | null, slot: number): boolean {
+  if (!availableSlots) return true;         // no schedule set → available (backward compatible)
+  try {
+    const arr = JSON.parse(availableSlots);
+    if (!Array.isArray(arr) || arr.length === 0) return true;
+    if (slot < 0) return false;             // outside working window and a schedule exists
+    return arr.includes(slot);
+  } catch { return true; }
+}
 // If a cleaner ACCEPTS a job then goes offline (phone off) before arriving, the booking
 // is auto-reassigned once their heartbeat is older than this.
 export const ACCEPTED_STALE_MS      = 3 * 60 * 1000;   // 3 minutes
@@ -80,6 +102,7 @@ export async function dispatchToNearestCleaners(
       lat:       usersTable.latitude,
       lng:       usersTable.longitude,
       pushToken: usersTable.expoPushToken,
+      slots:     cleanersTable.availableSlots,
     })
     .from(cleanersTable)
     .leftJoin(usersTable, eq(cleanersTable.userId, usersTable.id))
@@ -99,7 +122,26 @@ export async function dispatchToNearestCleaners(
     .where(inArray(bookingsTable.status, ["accepted", "arrived", "in_progress"]));
   const busyIds = new Set(busy.map(b => b.cleanerId).filter((id): id is number => id != null));
 
-  const eligible = allCleaners.filter(w => !excludeCleanerIds.includes(w.id) && !busyIds.has(w.id));
+  // Cleaners with a scheduled/assigned booking starting within the next 30 min must be
+  // left free for it — don't dispatch a new job that would overrun into it.
+  const now = new Date();
+  const soon = await db
+    .select({ cleanerId: bookingsTable.cleanerId })
+    .from(bookingsTable)
+    .where(and(
+      inArray(bookingsTable.status, ["scheduled", "accepted", "arrived"]),
+      gte(bookingsTable.scheduledAt, now),
+      lte(bookingsTable.scheduledAt, new Date(now.getTime() + SCHEDULED_BUFFER_MS)),
+    ));
+  const bufferedIds = new Set(soon.map(b => b.cleanerId).filter((id): id is number => id != null));
+
+  const slot = currentIstSlot(now);
+  const eligible = allCleaners.filter(w =>
+    !excludeCleanerIds.includes(w.id) &&
+    !busyIds.has(w.id) &&
+    !bufferedIds.has(w.id) &&
+    worksThisSlot(w.slots, slot),   // respect the cleaner's chosen working hours
+  );
   if (eligible.length === 0) return 0;
 
   const withDist = eligible.map(w => ({
