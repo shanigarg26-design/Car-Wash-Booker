@@ -22,10 +22,24 @@ jobs:
         env:
           SWEEP_TOKEN: ${{ secrets.SWEEP_TOKEN }}
         run: |
-          code=$(curl -s -X POST "https://carcleanpro-api.onrender.com/api/internal/sweep" \
-            -H "x-sweep-token: $SWEEP_TOKEN" -H "Content-Type: application/json" \
-            -w "\n%{http_code}" --max-time 60)
-          body=$(echo "$code" | head -n -1); status=$(echo "$code" | tail -n1)
-          echo "sweep -> HTTP $status"
-          echo "$body"
-          [ "$status" = "200" ] || exit 1
+          BASE="https://carcleanpro-api.onrender.com"
+          # Render's free tier spins the service down after ~15 min idle; a cold start can
+          # take 60-90s. Wake it first (ignore the result), then call the sweep with a
+          # generous timeout and a few retries so a single cold start doesn't fail the run
+          # (and spam failure emails). We only fail — and alert — if every attempt fails.
+          echo "Warming service..."
+          curl -s -o /dev/null --max-time 150 "$BASE/api/healthz" || true
+          for attempt in 1 2 3; do
+            resp=$(curl -s -X POST "$BASE/api/internal/sweep" \
+              -H "x-sweep-token: $SWEEP_TOKEN" -H "Content-Type: application/json" \
+              -w "\n%{http_code}" --max-time 150)
+            status=$(echo "$resp" | tail -n1)
+            body=$(echo "$resp" | sed '$d')
+            echo "attempt $attempt -> HTTP $status"
+            echo "$body"
+            [ "$status" = "200" ] && exit 0
+            echo "retrying in 20s..."
+            sleep 20
+          done
+          echo "sweep failed after 3 attempts"
+          exit 1
